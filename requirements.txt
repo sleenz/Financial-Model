@@ -1,0 +1,47 @@
+# Data & Computation
+pandas>=2.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Financial Data
+yfinance>=0.2.40
+alpha_vantage>=2.3.1
+pandas_datareader>=0.10.0
+requests>=2.31.0
+
+# Optimization
+cvxpy>=1.4.0
+PyPortfolioOpt>=1.5.5
+riskfolio-lib>=5.0.0
+
+# Risk & Volatility
+arch>=6.3.0
+empyrical>=0.5.5
+quantstats>=0.0.62
+
+# Machine Learning
+scikit-learn>=1.3.0
+statsmodels>=0.14.0
+
+# Visualization
+plotly>=5.18.0
+matplotlib>=3.7.0
+seaborn>=0.13.0
+
+# Web Interface
+streamlit>=1.31.0
+streamlit-aggrid>=0.3.4
+
+# Utilities
+python-dotenv>=1.0.0
+tenacity>=8.2.3
+loguru>=0.7.0
+joblib>=1.3.0
+tqdm>=4.66.0
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+
+# PDF Report Generation
+reportlab>=4.0.0
