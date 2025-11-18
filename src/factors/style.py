@@ -131,7 +131,7 @@ def calculate_quality_score(
         # Use return stability as proxy
         return_vol = returns.std()
         # Lower volatility = higher quality (more stable)
-        vol_z = -stats.zscore(return_vol)
+        vol_z = pd.Series(-stats.zscore(return_vol), index=return_vol.index)
         scores.append(vol_z)
 
     if not scores:

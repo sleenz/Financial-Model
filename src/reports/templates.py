@@ -103,7 +103,7 @@ class PortfolioSummaryTemplate:
 
         # Add pie chart if available
         if chart_images and 'allocation' in chart_images:
-            self.generator.add_image(chart_images['allocation'], width=5)
+            self.generator.add_image(chart_images['allocation'], width=4, height=4)
 
         # Performance Statistics
         self.generator.add_section_header("Performance Statistics")
@@ -136,7 +136,7 @@ class PortfolioSummaryTemplate:
         if chart_images and 'performance' in chart_images:
             self.generator.add_page_break()
             self.generator.add_section_header("Performance Chart")
-            self.generator.add_image(chart_images['performance'], width=6)
+            self.generator.add_image(chart_images['performance'], width=6, height=3.5)
 
         # Risk metrics
         if 'var_95' in metrics or 'cvar_95' in metrics:
@@ -288,7 +288,7 @@ class PerformanceReviewTemplate:
         if chart_images and 'cumulative' in chart_images:
             self.generator.add_page_break()
             self.generator.add_section_header("Cumulative Returns")
-            self.generator.add_image(chart_images['cumulative'], width=6)
+            self.generator.add_image(chart_images['cumulative'], width=6, height=3.5)
 
         # Drawdown analysis
         self.generator.add_section_header("Drawdown Analysis")
@@ -422,7 +422,7 @@ class RiskDashboardTemplate:
 
         # Add correlation heatmap if available
         if chart_images and 'correlation' in chart_images:
-            self.generator.add_image(chart_images['correlation'], width=5)
+            self.generator.add_image(chart_images['correlation'], width=5, height=4)
 
         # Stress test results
         if stress_results is not None and len(stress_results) > 0:
