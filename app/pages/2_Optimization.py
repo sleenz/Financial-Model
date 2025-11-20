@@ -77,9 +77,20 @@ if st.button("Run Optimization", type="primary"):
         optimizer = PortfolioOptimizer(returns, rf_rate)
         result = optimizer.optimize(method, constraints)
 
-        # Store result
+        # Store result and data for other pages
         st.session_state.optimization_result = result
         st.session_state.optimizer = optimizer
+        st.session_state.weights = result['weights']
+        st.session_state.returns = returns
+        st.session_state.prices = data.get('prices')
+        st.session_state.portfolio_value = capital
+
+        # Store metrics for reports
+        st.session_state.metrics = {
+            'annual_return': result['expected_return'],
+            'annual_volatility': result['volatility'],
+            'sharpe_ratio': result['sharpe_ratio']
+        }
 
         st.success("Optimization complete!")
 
@@ -181,48 +192,51 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
             optimizer = st.session_state.optimizer
             frontier = optimizer.efficient_frontier(n_points=30)
 
-            fig = go.Figure()
+            if frontier.empty or 'volatility' not in frontier.columns:
+                st.error("Could not calculate efficient frontier. Try a different optimization method or check your data.")
+            else:
+                fig = go.Figure()
 
-            # Frontier line
-            fig.add_trace(go.Scatter(
-                x=frontier['volatility'] * 100,
-                y=frontier['return'] * 100,
-                mode='lines',
-                name='Efficient Frontier',
-                line=dict(color='blue', width=2)
-            ))
+                # Frontier line
+                fig.add_trace(go.Scatter(
+                    x=frontier['volatility'] * 100,
+                    y=frontier['return'] * 100,
+                    mode='lines',
+                    name='Efficient Frontier',
+                    line=dict(color='blue', width=2)
+                ))
 
-            # Current portfolio
-            fig.add_trace(go.Scatter(
-                x=[result['volatility'] * 100],
-                y=[result['expected_return'] * 100],
-                mode='markers',
-                name='Optimal Portfolio',
-                marker=dict(size=15, color='red', symbol='star')
-            ))
+                # Current portfolio
+                fig.add_trace(go.Scatter(
+                    x=[result['volatility'] * 100],
+                    y=[result['expected_return'] * 100],
+                    mode='markers',
+                    name='Optimal Portfolio',
+                    marker=dict(size=15, color='red', symbol='star')
+                ))
 
-            # Individual assets
-            asset_returns = returns.mean() * 252 * 100
-            asset_vols = returns.std() * np.sqrt(252) * 100
+                # Individual assets
+                asset_returns = returns.mean() * 252 * 100
+                asset_vols = returns.std() * np.sqrt(252) * 100
 
-            fig.add_trace(go.Scatter(
-                x=asset_vols,
-                y=asset_returns,
-                mode='markers+text',
-                name='Individual Assets',
-                text=returns.columns,
-                textposition='top center',
-                marker=dict(size=8, color='gray')
-            ))
+                fig.add_trace(go.Scatter(
+                    x=asset_vols,
+                    y=asset_returns,
+                    mode='markers+text',
+                    name='Individual Assets',
+                    text=returns.columns,
+                    textposition='top center',
+                    marker=dict(size=8, color='gray')
+                ))
 
-            fig.update_layout(
-                title="Efficient Frontier",
-                xaxis_title="Volatility (%)",
-                yaxis_title="Expected Return (%)",
-                showlegend=True
-            )
+                fig.update_layout(
+                    title="Efficient Frontier",
+                    xaxis_title="Volatility (%)",
+                    yaxis_title="Expected Return (%)",
+                    showlegend=True
+                )
 
-            st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True)
 
     # Method comparison
     st.markdown("---")
