@@ -1,33 +1,14 @@
 # Advanced Portfolio Optimization System
-
-A production-ready portfolio optimization and risk management system with a Streamlit web interface, implementing cutting-edge quantitative finance techniques.
+Nothing too fancy, just a portfolio optimizer and risk calculation model. This project aims to provide help for financial analysis but not intended to be used as the main tool for financial analysis. DYOR and used this as an additional calculation assistant program.  
 
 ## Features
 
 - **Multi-Source Data Pipeline**: Intelligent fallback between yfinance, Alpha Vantage, Twelve Data, and FMP
-- **Advanced Optimization**: Mean-Variance, HRP, Black-Litterman, Risk Parity, and more
-- **Comprehensive Risk Analytics**: VaR, CVaR, GARCH volatility, drawdown metrics
+- **Optimization**: Mean-Variance, HRP, Black-Litterman, Risk Parity, and more
+- **Risk Analytics**: VaR, CVaR, GARCH volatility, drawdown metrics
 - **Stress Testing**: Historical scenarios and Monte Carlo simulations
 - **Position Sizing**: Actionable investment recommendations with share counts
-
-## Installation
-
-```bash
-# Clone the repository
-git clone https://github.com/example/portfolio-optimizer.git
-cd portfolio-optimizer
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Copy environment file and add your API keys
-cp .env.example .env
-```
-
+  
 ## Configuration
 
 Edit `.env` with your API keys:
@@ -37,8 +18,6 @@ ALPHA_VANTAGE_KEY=your_key_here
 TWELVE_DATA_KEY=your_key_here
 FMP_KEY=your_key_here
 ```
-
-## Usage
 
 ### Web Interface
 
@@ -75,9 +54,4 @@ portfolio-optimizer/
 ├── app/                # Streamlit web interface
 ├── tests/              # Unit tests
 ├── examples/           # Example scripts
-└── docs/               # Documentation
 ```
-
-## License
-
-MIT License
