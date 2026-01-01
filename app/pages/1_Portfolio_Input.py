@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from src.data.data_manager import DataManager
 from src.utils.helpers import validate_tickers
+from src.portfolio.holdings import HoldingsTracker
 
 st.set_page_config(page_title="Portfolio Input", page_icon="📝", layout="wide")
 
@@ -23,6 +24,10 @@ if 'tickers' not in st.session_state:
     st.session_state.tickers = []
 if 'portfolio_data' not in st.session_state:
     st.session_state.portfolio_data = None
+if 'current_holdings' not in st.session_state:
+    st.session_state.current_holdings = {}
+if 'holdings_tracker' not in st.session_state:
+    st.session_state.holdings_tracker = None
 
 # Sidebar for quick settings
 with st.sidebar:
@@ -101,6 +106,168 @@ with col2:
         years = int(period.split()[0])
         start_date = datetime.now() - timedelta(days=365*years)
         end_date = datetime.now()
+
+st.markdown("---")
+
+# Current Holdings Input Section
+st.subheader("📊 Current Holdings (Optional)")
+st.markdown("Enter your current stock holdings to analyze portfolio diversity and concentration.")
+
+with st.expander("Enter Current Holdings", expanded=False):
+    st.markdown("**Add your current stock positions:**")
+
+    col1, col2, col3 = st.columns([2, 1, 1])
+
+    with col1:
+        holding_ticker = st.text_input(
+            "Stock Ticker",
+            key="holding_ticker",
+            help="Enter stock symbol (e.g., NVDA, AAPL)"
+        ).upper()
+
+    with col2:
+        holding_shares = st.number_input(
+            "Number of Shares",
+            min_value=0.0,
+            value=0.0,
+            step=1.0,
+            key="holding_shares",
+            help="Number of shares you own"
+        )
+
+    with col3:
+        st.write("")  # Spacing
+        st.write("")  # Spacing
+        if st.button("Add Holding", type="secondary"):
+            if holding_ticker and holding_shares > 0:
+                if 'current_holdings' not in st.session_state:
+                    st.session_state.current_holdings = {}
+                st.session_state.current_holdings[holding_ticker] = holding_shares
+                st.success(f"Added {holding_shares} shares of {holding_ticker}")
+                st.rerun()
+            else:
+                st.error("Please enter a valid ticker and number of shares")
+
+    # Display current holdings
+    if st.session_state.current_holdings:
+        st.markdown("**Your Current Holdings:**")
+
+        holdings_df = pd.DataFrame([
+            {"Ticker": ticker, "Shares": shares}
+            for ticker, shares in st.session_state.current_holdings.items()
+        ])
+
+        # Add delete buttons
+        for idx, row in holdings_df.iterrows():
+            col1, col2, col3 = st.columns([2, 1, 1])
+            with col1:
+                st.write(f"**{row['Ticker']}**")
+            with col2:
+                st.write(f"{row['Shares']:.2f} shares")
+            with col3:
+                if st.button(f"Remove", key=f"remove_{row['Ticker']}"):
+                    del st.session_state.current_holdings[row['Ticker']]
+                    st.rerun()
+
+        # Clear all button
+        if st.button("Clear All Holdings", type="secondary"):
+            st.session_state.current_holdings = {}
+            st.session_state.holdings_tracker = None
+            st.rerun()
+
+        # Analyze diversity button
+        st.markdown("---")
+        if st.button("Analyze Portfolio Diversity", type="primary"):
+            # Fetch current prices for holdings
+            try:
+                dm = DataManager(show_progress=False)
+                tickers_list = list(st.session_state.current_holdings.keys())
+
+                with st.spinner("Fetching current prices..."):
+                    prices = dm.get_price_data(
+                        tickers_list,
+                        datetime.now() - timedelta(days=5),
+                        datetime.now()
+                    )
+                    current_prices = prices.iloc[-1]  # Get most recent prices
+
+                    # Create holdings tracker
+                    tracker = HoldingsTracker(
+                        st.session_state.current_holdings,
+                        current_prices
+                    )
+                    st.session_state.holdings_tracker = tracker
+
+                    st.success("Diversity analysis complete!")
+
+            except Exception as e:
+                st.error(f"Error fetching prices: {e}")
+                # Create tracker without prices
+                tracker = HoldingsTracker(st.session_state.current_holdings)
+                st.session_state.holdings_tracker = tracker
+
+# Show diversity analysis if available
+if st.session_state.holdings_tracker is not None:
+    st.markdown("---")
+    st.subheader("📈 Portfolio Diversity Analysis")
+
+    tracker = st.session_state.holdings_tracker
+    metrics = tracker.calculate_diversity_metrics()
+    rating = tracker.get_diversity_rating()
+    recommendations = tracker.get_diversity_recommendations()
+
+    # Key metrics
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric("Number of Stocks", metrics['num_holdings'])
+    with col2:
+        st.metric("Diversity Rating", rating)
+    with col3:
+        st.metric("Effective Stocks", f"{metrics['effective_stocks']:.2f}")
+    with col4:
+        st.metric("Top 3 Concentration", f"{metrics['top_3_concentration']*100:.1f}%")
+
+    # Holdings breakdown
+    st.markdown("**Holdings Breakdown:**")
+    holdings_df = tracker.get_holdings_dataframe().sort_values('Weight', ascending=False)
+
+    # Format for display
+    display_df = holdings_df.copy()
+    display_df['Shares'] = display_df['Shares'].apply(lambda x: f"{x:.2f}")
+    display_df['Price'] = display_df['Price'].apply(lambda x: f"${x:.2f}")
+    display_df['Value'] = display_df['Value'].apply(lambda x: f"${x:,.2f}")
+    display_df['Weight'] = display_df['Weight'].apply(lambda x: f"{x*100:.1f}%")
+
+    st.dataframe(display_df, use_container_width=True)
+
+    # Detailed metrics
+    with st.expander("Detailed Diversity Metrics", expanded=False):
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("**Concentration Metrics:**")
+            st.write(f"- Herfindahl Index (HHI): {metrics['herfindahl_index']:.4f}")
+            st.write(f"- Top 5 Concentration: {metrics['top_5_concentration']*100:.1f}%")
+            st.write(f"- Largest Position: {metrics['largest_position']*100:.1f}%")
+            st.write(f"- Smallest Position: {metrics['smallest_position']*100:.1f}%")
+
+        with col2:
+            st.markdown("**Distribution Metrics:**")
+            st.write(f"- Average Position Size: {metrics['avg_position_size']*100:.1f}%")
+            st.write(f"- Position Std Dev: {metrics['std_position_size']*100:.1f}%")
+            st.write(f"- Gini Coefficient: {metrics['gini_coefficient']:.4f}")
+            st.write(f"- Diversification Ratio: {metrics['diversification_ratio']:.4f}")
+
+    # Recommendations
+    st.markdown("**Recommendations:**")
+    for i, rec in enumerate(recommendations, 1):
+        if "good diversification" in rec.lower():
+            st.success(f"{i}. {rec}")
+        elif "consider" in rec.lower():
+            st.warning(f"{i}. {rec}")
+        else:
+            st.info(f"{i}. {rec}")
 
 st.markdown("---")
 
