@@ -13,6 +13,11 @@ from .rebalancer import (
     check_rebalancing,
     calculate_turnover,
 )
+from .holdings import (
+    HoldingsTracker,
+    create_holdings_from_dict,
+    analyze_portfolio_diversity,
+)
 
 __all__ = [
     "PositionCalculator",
@@ -24,4 +29,7 @@ __all__ = [
     "PerformanceAttributor",
     "check_rebalancing",
     "calculate_turnover",
+    "HoldingsTracker",
+    "create_holdings_from_dict",
+    "analyze_portfolio_diversity",
 ]
