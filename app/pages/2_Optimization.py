@@ -116,6 +116,113 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
 
     st.markdown("---")
 
+    # Rebalancing Section (if user has current holdings)
+    if st.session_state.get('current_portfolio_weights') is not None:
+        st.subheader("🔄 Rebalancing Recommendations")
+
+        current_weights = st.session_state.current_portfolio_weights
+        optimal_weights = weights
+
+        # Create comparison dataframe
+        rebalance_data = []
+        for ticker in set(current_weights.index) | set(optimal_weights.index):
+            current = current_weights.get(ticker, 0)
+            optimal = optimal_weights.get(ticker, 0)
+            difference = optimal - current
+
+            # Get current holdings
+            holdings_dict = st.session_state.get('current_holdings', {})
+            current_shares = holdings_dict.get(ticker, 0)
+
+            # Calculate target shares
+            current_price = data['prices'].iloc[-1].get(ticker, 0)
+            target_value = capital * optimal
+            target_shares = target_value / current_price if current_price > 0 else 0
+            shares_change = target_shares - current_shares
+
+            rebalance_data.append({
+                'Ticker': ticker,
+                'Current Weight': current,
+                'Target Weight': optimal,
+                'Change': difference,
+                'Current Shares': current_shares,
+                'Target Shares': target_shares,
+                'Shares to Trade': shares_change
+            })
+
+        rebalance_df = pd.DataFrame(rebalance_data).set_index('Ticker')
+        rebalance_df = rebalance_df.sort_values('Change', key=abs, ascending=False)
+
+        # Visual comparison
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("**Current vs Target Allocation**")
+
+            # Filter for display
+            significant = rebalance_df[(rebalance_df['Current Weight'] > 0.001) |
+                                       (rebalance_df['Target Weight'] > 0.001)]
+
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                name='Current',
+                x=significant.index,
+                y=significant['Current Weight'] * 100,
+                marker_color='lightblue'
+            ))
+            fig.add_trace(go.Bar(
+                name='Target',
+                x=significant.index,
+                y=significant['Target Weight'] * 100,
+                marker_color='steelblue'
+            ))
+            fig.update_layout(
+                barmode='group',
+                yaxis_title="Weight (%)",
+                xaxis_title="Asset"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        with col2:
+            st.markdown("**Required Changes**")
+
+            # Show changes table
+            changes_display = rebalance_df[['Current Weight', 'Target Weight', 'Change', 'Shares to Trade']].copy()
+            changes_display['Current Weight'] = (changes_display['Current Weight'] * 100).round(2).astype(str) + '%'
+            changes_display['Target Weight'] = (changes_display['Target Weight'] * 100).round(2).astype(str) + '%'
+            changes_display['Change'] = changes_display['Change'].apply(
+                lambda x: f"+{x*100:.2f}%" if x > 0 else f"{x*100:.2f}%"
+            )
+            changes_display['Shares to Trade'] = changes_display['Shares to Trade'].round(2)
+
+            st.dataframe(changes_display, use_container_width=True)
+
+        # Action summary
+        st.markdown("**Trading Actions:**")
+
+        buy_positions = rebalance_df[rebalance_df['Shares to Trade'] > 0.5]
+        sell_positions = rebalance_df[rebalance_df['Shares to Trade'] < -0.5]
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            if not buy_positions.empty:
+                st.markdown("**📈 Buy:**")
+                for ticker, row in buy_positions.iterrows():
+                    st.write(f"- **{ticker}**: Buy {row['Shares to Trade']:.0f} shares")
+            else:
+                st.info("No buying needed")
+
+        with col2:
+            if not sell_positions.empty:
+                st.markdown("**📉 Sell:**")
+                for ticker, row in sell_positions.iterrows():
+                    st.write(f"- **{ticker}**: Sell {abs(row['Shares to Trade']):.0f} shares")
+            else:
+                st.info("No selling needed")
+
+    st.markdown("---")
+
     # Visualizations
     col1, col2 = st.columns(2)
 
