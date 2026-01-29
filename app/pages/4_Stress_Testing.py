@@ -25,11 +25,16 @@ if 'portfolio_data' not in st.session_state or st.session_state.portfolio_data i
 data = st.session_state.portfolio_data
 returns = data['returns']
 
-# Get weights
+# Get weights based on what's available
 if 'optimization_result' in st.session_state and st.session_state.optimization_result:
     weights = st.session_state.optimization_result['weights'].values
+    st.info("📊 Stress testing **optimized portfolio**")
+elif 'current_portfolio_weights' in st.session_state and st.session_state.current_portfolio_weights is not None:
+    weights = st.session_state.current_portfolio_weights.values
+    st.info("💼 Stress testing **your current holdings**")
 else:
     weights = np.ones(len(returns.columns)) / len(returns.columns)
+    st.warning("⚠️ Using equal weights. Enter holdings or run optimization for accurate results.")
 
 # Portfolio value
 portfolio_value = st.session_state.get('settings', {}).get('total_capital', 10000)

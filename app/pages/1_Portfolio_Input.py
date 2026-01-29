@@ -159,55 +159,99 @@ with tab1:
     st.markdown("---")
     if st.button("📊 Analyze My Portfolio & Fetch Data", type="primary", use_container_width=True):
         # Fetch prices AND historical data for holdings
-        try:
-            dm = DataManager(show_progress=False)
-            tickers_list = list(st.session_state.current_holdings.keys())
+        if not st.session_state.current_holdings:
+            st.error("Please add at least one holding first!")
+        else:
+            try:
+                dm = DataManager(show_progress=False)
+                tickers_list = list(st.session_state.current_holdings.keys())
 
-            with st.spinner("Fetching price data for your holdings..."):
-                # Fetch historical data for optimization
-                prices = dm.get_price_data(
-                    tickers_list,
-                    start_date,
-                    end_date
-                )
+                st.info(f"Fetching data for: {', '.join(tickers_list)}")
 
-                # Calculate returns
-                returns = prices.pct_change().dropna()
+                with st.spinner("Fetching price data for your holdings..."):
+                    # Fetch historical data for optimization
+                    prices = dm.get_price_data(
+                        tickers_list,
+                        start_date,
+                        end_date
+                    )
 
-                # Get current prices (most recent)
-                current_prices = prices.iloc[-1]
+                    # Debug: Show what we got
+                    st.write(f"✓ Fetched data for {len(prices.columns)} tickers: {list(prices.columns)}")
+                    st.write(f"✓ Date range: {prices.index[0].date()} to {prices.index[-1].date()}")
+                    st.write(f"✓ Total rows: {len(prices)}")
 
-                # Create holdings tracker
-                tracker = HoldingsTracker(
-                    st.session_state.current_holdings,
-                    current_prices
-                )
-                st.session_state.holdings_tracker = tracker
+                    # Calculate returns
+                    returns = prices.pct_change().dropna()
 
-                # Calculate current portfolio state
-                holdings_df = tracker.get_holdings_dataframe()
-                total_value = tracker.calculate_total_value()
-                current_weights = holdings_df['Weight']
+                    # Get current prices (most recent)
+                    current_prices = prices.iloc[-1]
 
-                # Store everything in session state
-                st.session_state.tickers = tickers_list
-                st.session_state.portfolio_data = {
-                    'prices': prices,
-                    'returns': returns,
-                    'start_date': start_date,
-                    'end_date': end_date,
-                    'current_prices': current_prices,
-                }
-                st.session_state.current_portfolio_weights = current_weights
-                st.session_state.settings['total_capital'] = total_value
+                    # Debug: Show current prices
+                    st.write("**Current Prices:**")
+                    for ticker in current_prices.index:
+                        st.write(f"- {ticker}: ${current_prices[ticker]:.2f}")
 
-                st.success(f"✓ Portfolio analyzed! Total value: ${total_value:,.2f}")
-                st.info("📈 Your portfolio data is ready. Go to the **Optimization** page to see recommended adjustments!")
+                    # Create holdings tracker
+                    tracker = HoldingsTracker(
+                        st.session_state.current_holdings,
+                        current_prices
+                    )
+                    st.session_state.holdings_tracker = tracker
 
-        except Exception as e:
-            st.error(f"Error fetching data: {e}")
-            import traceback
-            st.code(traceback.format_exc())
+                    # Calculate current portfolio state
+                    holdings_df = tracker.get_holdings_dataframe()
+                    total_value = tracker.calculate_total_value()
+
+                    # Debug: Show holdings values
+                    st.write("**Portfolio Breakdown:**")
+                    for ticker in holdings_df.index:
+                        row = holdings_df.loc[ticker]
+                        st.write(f"- {ticker}: {row['Shares']:.2f} shares × ${row['Price']:.2f} = ${row['Value']:.2f} ({row['Weight']*100:.1f}%)")
+
+                    if total_value == 0:
+                        st.error("⚠️ Total portfolio value is $0. This means prices were not fetched correctly.")
+                        st.warning("Possible issues: Invalid ticker symbols, no data available for date range, or API limits reached.")
+
+                    current_weights = holdings_df['Weight']
+
+                    # Store everything in session state
+                    st.session_state.tickers = tickers_list
+                    st.session_state.portfolio_data = {
+                        'prices': prices,
+                        'returns': returns,
+                        'start_date': start_date,
+                        'end_date': end_date,
+                        'current_prices': current_prices,
+                    }
+                    st.session_state.current_portfolio_weights = current_weights
+                    st.session_state.settings['total_capital'] = total_value
+
+                    # Store for other analysis pages
+                    st.session_state.optimizer = None  # Will be created in optimization
+                    st.session_state.weights = current_weights  # Current weights as starting point
+                    st.session_state.prices = prices
+                    st.session_state.portfolio_value = total_value
+
+                    st.success(f"✓ Portfolio analyzed! Total value: ${total_value:,.2f}")
+                    st.info("📈 Your portfolio data is ready. You can now access:")
+                    st.write("- **Optimization**: See rebalancing recommendations")
+                    st.write("- **Risk Analytics**: Analyze VaR, CVaR, drawdowns")
+                    st.write("- **Stress Testing**: Test portfolio under scenarios")
+                    st.write("- **Monitoring**: Track portfolio performance")
+                    st.write("- **Factor Analysis**: Analyze factor exposures")
+                    st.write("- **Reports**: Generate comprehensive reports")
+
+            except Exception as e:
+                st.error(f"❌ Error fetching data: {e}")
+                st.warning("Common issues:")
+                st.write("- Invalid ticker symbols (check spelling)")
+                st.write("- Ticker not available in data sources")
+                st.write("- Date range has no data")
+                st.write("- API rate limits exceeded")
+                import traceback
+                with st.expander("Show Full Error Details"):
+                    st.code(traceback.format_exc())
 
     # Show diversity analysis if available
     if st.session_state.holdings_tracker is not None:

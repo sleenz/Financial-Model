@@ -28,16 +28,22 @@ data = st.session_state.portfolio_data
 returns = data['returns']
 prices = data['prices']
 
-# Calculate portfolio returns if optimization done
+# Calculate portfolio returns based on what's available
 if 'optimization_result' in st.session_state and st.session_state.optimization_result:
+    # Use optimized weights
     weights = st.session_state.optimization_result['weights']
     portfolio_returns = (returns * weights).sum(axis=1)
-    st.info(f"Analyzing optimized portfolio with {(weights > 0.001).sum()} positions")
+    st.info(f"📊 Analyzing **optimized portfolio** with {(weights > 0.001).sum()} positions")
+elif 'current_portfolio_weights' in st.session_state and st.session_state.current_portfolio_weights is not None:
+    # Use actual holdings weights
+    weights = st.session_state.current_portfolio_weights
+    portfolio_returns = (returns * weights).sum(axis=1)
+    st.info(f"💼 Analyzing **your current holdings** with {len(weights)} positions")
 else:
-    # Equal weight
+    # Equal weight fallback
     weights = pd.Series(1/len(returns.columns), index=returns.columns)
     portfolio_returns = returns.mean(axis=1)
-    st.info("Using equal-weight portfolio (run optimization first for custom weights)")
+    st.warning("⚠️ Using equal-weight portfolio. Enter holdings in Portfolio Input or run optimization for accurate analysis.")
 
 # Initialize calculators
 rm = RiskMetrics(returns)

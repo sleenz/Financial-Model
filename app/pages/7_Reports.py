@@ -20,15 +20,38 @@ st.title("📄 Report Generation")
 st.markdown("Generate professional PDF reports for your portfolio analysis")
 
 # Check for required session state
-if 'returns' not in st.session_state or 'weights' not in st.session_state:
-    st.warning("Please complete portfolio optimization first.")
-    st.page_link("pages/1_Portfolio_Input.py", label="Go to Portfolio Input")
+if 'portfolio_data' not in st.session_state or st.session_state.portfolio_data is None:
+    st.warning("Please load portfolio data first on the Portfolio Input page.")
     st.stop()
 
-returns = st.session_state['returns']
-weights = st.session_state['weights']
-prices = st.session_state.get('prices', None)
-metrics = st.session_state.get('metrics', {})
+data = st.session_state.portfolio_data
+returns = data['returns']
+prices = data.get('prices')
+
+# Get weights based on what's available
+if 'optimization_result' in st.session_state and st.session_state.optimization_result:
+    weights = st.session_state.optimization_result['weights']
+    metrics = st.session_state.get('metrics', {})
+    st.info("📊 Generating report for **optimized portfolio**")
+elif 'current_portfolio_weights' in st.session_state and st.session_state.current_portfolio_weights is not None:
+    weights = st.session_state.current_portfolio_weights
+    # Calculate metrics for current holdings
+    portfolio_returns = (returns * weights).sum(axis=1)
+    metrics = {
+        'annual_return': portfolio_returns.mean() * 252,
+        'annual_volatility': portfolio_returns.std() * np.sqrt(252),
+        'sharpe_ratio': (portfolio_returns.mean() * 252) / (portfolio_returns.std() * np.sqrt(252))
+    }
+    st.info("💼 Generating report for **your current holdings**")
+else:
+    weights = pd.Series(1/len(returns.columns), index=returns.columns)
+    portfolio_returns = returns.mean(axis=1)
+    metrics = {
+        'annual_return': portfolio_returns.mean() * 252,
+        'annual_volatility': portfolio_returns.std() * np.sqrt(252),
+        'sharpe_ratio': (portfolio_returns.mean() * 252) / (portfolio_returns.std() * np.sqrt(252))
+    }
+    st.warning("⚠️ Using equal weights. Enter holdings or run optimization for accurate report.")
 
 # Check if reportlab is available
 try:

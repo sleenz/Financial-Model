@@ -39,7 +39,16 @@ class HoldingsTracker:
         data = []
 
         for ticker, shares in self.holdings.items():
-            price = self.current_prices.get(ticker, 0.0) if len(self.current_prices) > 0 else 0.0
+            # Handle price lookup more robustly
+            if len(self.current_prices) > 0:
+                if ticker in self.current_prices.index:
+                    price = self.current_prices[ticker]
+                else:
+                    logger.warning(f"No price found for {ticker}, using 0.0")
+                    price = 0.0
+            else:
+                price = 0.0
+
             value = shares * price
 
             data.append({
@@ -56,6 +65,7 @@ class HoldingsTracker:
         if total_value > 0:
             df['Weight'] = df['Value'] / total_value
         else:
+            logger.warning("Total portfolio value is 0, cannot calculate weights")
             df['Weight'] = 0.0
 
         return df
