@@ -26,14 +26,24 @@ st.title("📊 Factor Analysis")
 st.markdown("Analyze what's driving your portfolio returns")
 
 # Check for required session state
-if 'returns' not in st.session_state or 'weights' not in st.session_state:
-    st.warning("Please complete portfolio optimization first.")
-    st.page_link("pages/1_Portfolio_Input.py", label="Go to Portfolio Input")
+if 'portfolio_data' not in st.session_state or st.session_state.portfolio_data is None:
+    st.warning("Please load portfolio data first on the Portfolio Input page.")
     st.stop()
 
-returns = st.session_state['returns']
-weights = st.session_state['weights']
-prices = st.session_state.get('prices', None)
+data = st.session_state.portfolio_data
+returns = data['returns']
+prices = data.get('prices')
+
+# Get weights based on what's available
+if 'optimization_result' in st.session_state and st.session_state.optimization_result:
+    weights = st.session_state.optimization_result['weights']
+    st.info("📊 Analyzing **optimized portfolio** factor exposures")
+elif 'current_portfolio_weights' in st.session_state and st.session_state.current_portfolio_weights is not None:
+    weights = st.session_state.current_portfolio_weights
+    st.info("💼 Analyzing **your current holdings** factor exposures")
+else:
+    weights = pd.Series(1/len(returns.columns), index=returns.columns)
+    st.warning("⚠️ Using equal weights. Enter holdings or run optimization for accurate analysis.")
 
 # Tabs for different analyses
 tab1, tab2, tab3, tab4 = st.tabs([

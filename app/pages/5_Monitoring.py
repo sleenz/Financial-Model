@@ -25,12 +25,20 @@ data = st.session_state.portfolio_data
 returns = data['returns']
 prices = data['prices']
 
-# Get target weights
+# Get target and current weights
 if 'optimization_result' in st.session_state and st.session_state.optimization_result:
     target_weights = st.session_state.optimization_result['weights']
+    st.info("📊 Monitoring **optimized portfolio**")
 else:
     target_weights = pd.Series(1/len(returns.columns), index=returns.columns)
-    st.info("Using equal weights as target (run optimization first)")
+    st.warning("⚠️ Using equal weights as target (run optimization for custom allocation)")
+
+# Check if we have actual current holdings
+has_current_holdings = ('current_portfolio_weights' in st.session_state and
+                        st.session_state.current_portfolio_weights is not None)
+
+if has_current_holdings:
+    st.success("💼 You have current holdings entered - using actual portfolio for monitoring")
 
 st.markdown("---")
 
