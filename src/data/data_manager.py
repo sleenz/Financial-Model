@@ -1,6 +1,6 @@
 """Data Manager with multi-source fallback and intelligent caching."""
 
-from datetime import datetime
+from datetime import datetime, date
 from typing import List, Optional, Union
 import pandas as pd
 from tqdm import tqdm
@@ -64,8 +64,8 @@ class DataManager:
     def get_price_data(
         self,
         tickers: Union[str, List[str]],
-        start_date: Union[str, datetime],
-        end_date: Union[str, datetime] = None,
+        start_date: Union[str, datetime, date],
+        end_date: Union[str, datetime, date] = None,
         validate: bool = True,
         use_cache: bool = True,
     ) -> pd.DataFrame:
@@ -74,8 +74,8 @@ class DataManager:
 
         Args:
             tickers: Single ticker or list of tickers
-            start_date: Start date (string or datetime)
-            end_date: End date (string or datetime, default: today)
+            start_date: Start date (string, datetime, or date)
+            end_date: End date (string, datetime, or date, default: today)
             validate: Whether to validate the data
             use_cache: Whether to use cache (if enabled)
 
@@ -88,12 +88,24 @@ class DataManager:
         # Normalize inputs
         tickers = validate_tickers(tickers)
 
+        # Convert dates to pandas Timestamp for consistency
         if isinstance(start_date, str):
             start_date = pd.to_datetime(start_date)
+        elif isinstance(start_date, date) and not isinstance(start_date, datetime):
+            # Convert date to datetime
+            start_date = pd.Timestamp(start_date)
+        elif isinstance(start_date, datetime):
+            start_date = pd.Timestamp(start_date)
+
         if end_date is None:
-            end_date = datetime.now()
+            end_date = pd.Timestamp(datetime.now())
         elif isinstance(end_date, str):
             end_date = pd.to_datetime(end_date)
+        elif isinstance(end_date, date) and not isinstance(end_date, datetime):
+            # Convert date to datetime
+            end_date = pd.Timestamp(end_date)
+        elif isinstance(end_date, datetime):
+            end_date = pd.Timestamp(end_date)
 
         logger.info(
             f"Fetching data for {len(tickers)} tickers from "
