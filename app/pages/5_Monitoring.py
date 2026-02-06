@@ -96,7 +96,7 @@ with tab1:
             yaxis_title="Weight (%)",
             barmode='group'
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     # Rebalancing analysis
     st.markdown("---")
@@ -147,7 +147,7 @@ with tab1:
             display_trades['Shares'] = display_trades['Shares'].round(2)
             display_trades['Trade Value'] = display_trades['Trade Value'].apply(lambda x: f"${x:,.2f}")
 
-            st.dataframe(display_trades, use_container_width=True)
+            st.dataframe(display_trades, width="stretch")
 
             # Summary metrics
             col1, col2, col3 = st.columns(3)
@@ -192,7 +192,7 @@ with tab2:
             xaxis_title="Asset",
             yaxis_title="Contribution (%)"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with col2:
         # Risk contribution
@@ -204,7 +204,7 @@ with tab2:
             names=risk_contrib.index,
             title="Risk Contribution"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     # Detailed tables
     st.markdown("---")
@@ -217,7 +217,7 @@ with tab2:
         display_contrib['Return'] = (display_contrib['Return'] * 100).round(2)
         display_contrib['Contribution'] = (display_contrib['Contribution'] * 100).round(4)
         display_contrib['Contribution %'] = display_contrib['Contribution %'].round(2)
-        st.dataframe(display_contrib, use_container_width=True)
+        st.dataframe(display_contrib, width="stretch")
 
     with col2:
         st.markdown("**Risk Attribution**")
@@ -226,7 +226,7 @@ with tab2:
         display_risk['Volatility'] = (display_risk['Volatility'] * 100).round(2)
         display_risk['Risk Contribution'] = display_risk['Risk Contribution'].round(4)
         display_risk['Risk Contribution %'] = display_risk['Risk Contribution %'].round(2)
-        st.dataframe(display_risk, use_container_width=True)
+        st.dataframe(display_risk, width="stretch")
 
 with tab3:
     st.subheader("Dollar-Cost Averaging Scheduler")
@@ -274,7 +274,7 @@ with tab3:
             if ticker in display_schedule.columns:
                 display_schedule[ticker] = display_schedule[ticker].apply(lambda x: f"${x:,.2f}")
 
-        st.dataframe(display_schedule, use_container_width=True)
+        st.dataframe(display_schedule, width="stretch")
 
         # Download
         csv = schedule.to_csv(index=False)
@@ -306,7 +306,7 @@ fig.update_layout(
     xaxis_title="Date",
     yaxis_title="Growth of $1"
 )
-st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig, width="stretch")
 
 # Period returns
 st.markdown("**Period Returns**")

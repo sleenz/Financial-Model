@@ -56,7 +56,7 @@ with tab1:
             results = stress_tester.run_all_historical()
 
             # Display results
-            st.dataframe(results.round(2), use_container_width=True)
+            st.dataframe(results.round(2), width="stretch")
 
             # Chart
             fig = go.Figure(data=[
@@ -72,7 +72,7 @@ with tab1:
                 yaxis_title="Return (%)",
                 xaxis_tickangle=-45
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
     # Individual scenario details
     st.markdown("---")
@@ -152,7 +152,7 @@ with tab2:
                 xaxis_title="Portfolio Value ($)",
                 yaxis_title="Frequency"
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             # Percentile table
             st.markdown("**Percentile Distribution**")
@@ -160,7 +160,7 @@ with tab2:
                 'Percentile': analysis['percentiles'].keys(),
                 'Value ($)': [f"${v:,.0f}" for v in analysis['percentiles'].values()]
             })
-            st.dataframe(pct_df.T, use_container_width=True)
+            st.dataframe(pct_df.T, width="stretch")
 
             # Sample paths
             st.markdown("**Sample Simulation Paths**")
@@ -188,7 +188,7 @@ with tab2:
                 xaxis_title="Day",
                 yaxis_title="Portfolio Value ($)"
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
 with tab3:
     st.subheader("Custom Stress Test")
@@ -240,6 +240,6 @@ with tab3:
             xaxis_title="Market Shock (%)",
             yaxis_title="Portfolio Value ($)"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
-        st.dataframe(sensitivity.round(2), use_container_width=True)
+        st.dataframe(sensitivity.round(2), width="stretch")

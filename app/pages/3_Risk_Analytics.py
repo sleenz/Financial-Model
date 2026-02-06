@@ -97,7 +97,7 @@ with tab1:
         st.markdown("**VaR by Method (Daily)**")
         var_display = var_results.copy() * 100
         var_display = var_display.round(3)
-        st.dataframe(var_display, use_container_width=True)
+        st.dataframe(var_display, width="stretch")
 
     with col2:
         # VaR distribution
@@ -120,7 +120,7 @@ with tab1:
             yaxis_title="Frequency",
             showlegend=False
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 with tab2:
     st.subheader("Drawdown Analysis")
@@ -146,7 +146,7 @@ with tab2:
             xaxis_title="Date",
             yaxis_title="Drawdown (%)"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with col2:
         # Drawdown metrics table
@@ -158,13 +158,13 @@ with tab2:
             'Ulcer Index': rm.ulcer_index(prices) * 100,
         }).round(2)
 
-        st.dataframe(dd_metrics, use_container_width=True)
+        st.dataframe(dd_metrics, width="stretch")
 
         # Calmar ratio
         calmar = rm.calmar_ratio(prices)
         st.markdown("**Calmar Ratio (Return/MDD)**")
         calmar_df = pd.DataFrame({'Calmar': calmar}).round(3)
-        st.dataframe(calmar_df, use_container_width=True)
+        st.dataframe(calmar_df, width="stretch")
 
 with tab3:
     st.subheader("Correlation Analysis")
@@ -182,7 +182,7 @@ with tab3:
             color_continuous_scale='RdBu_r',
             title="Correlation Matrix"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with col2:
         # Correlation stats
@@ -202,7 +202,7 @@ with tab3:
                 })
 
         pairs_df = pd.DataFrame(corr_pairs).sort_values('Correlation', ascending=False)
-        st.dataframe(pairs_df.head(5), use_container_width=True)
+        st.dataframe(pairs_df.head(5), width="stretch")
 
 with tab4:
     st.subheader("Volatility Analysis")
@@ -229,7 +229,7 @@ with tab4:
             xaxis_title="Date",
             yaxis_title="Annualized Volatility (%)"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with col2:
         # EWMA volatility
@@ -250,7 +250,7 @@ with tab4:
             xaxis_title="Date",
             yaxis_title="Volatility (%)"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 # Performance ratios summary
 st.markdown("---")
@@ -267,7 +267,7 @@ summary_display['Calmar Ratio'] = summary_display['Calmar Ratio'].round(3)
 summary_display['Skewness'] = summary_display['Skewness'].round(3)
 summary_display['Kurtosis'] = summary_display['Kurtosis'].round(3)
 
-st.dataframe(summary_display, use_container_width=True)
+st.dataframe(summary_display, width="stretch")
 
 # Export
 st.markdown("---")

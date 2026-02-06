@@ -79,6 +79,19 @@ class PortfolioOptimizer:
         if constraints is None:
             constraints = default_constraints()
 
+        # Special handling for single asset portfolios
+        if self.n_assets == 1:
+            logger.info("Single asset portfolio - returning 100% weight")
+            weights = np.array([1.0])
+            metrics = self._calculate_metrics(weights)
+            return {
+                'weights': pd.Series(weights, index=self.tickers),
+                'expected_return': metrics['expected_return'],
+                'volatility': metrics['volatility'],
+                'sharpe_ratio': metrics['sharpe_ratio'],
+                'method': method,
+            }
+
         method_map = {
             'max_sharpe': self._optimize_sharpe,
             'max_return': self._optimize_return,
@@ -324,6 +337,12 @@ class PortfolioOptimizer:
             {'type': 'eq', 'fun': lambda w: np.sum(w) - 1}  # Weights sum to 1
         ]
 
+        # For 2-3 asset portfolios, use more lenient tolerances
+        if self.n_assets <= 3:
+            options = {'ftol': 1e-6, 'maxiter': 1000}
+        else:
+            options = {'ftol': 1e-10, 'maxiter': 1000}
+
         # Run optimization
         result = minimize(
             objective,
@@ -331,11 +350,25 @@ class PortfolioOptimizer:
             method='SLSQP',
             bounds=bounds,
             constraints=scipy_constraints,
-            options={'ftol': 1e-10, 'maxiter': 1000}
+            options=options
         )
 
         if not result.success:
-            logger.warning(f"Optimization may not have converged: {result.message}")
+            # For small portfolios, try with different initial guess
+            if self.n_assets <= 3:
+                logger.info("Retrying optimization with random initial guess")
+                init_weights = np.random.dirichlet(np.ones(self.n_assets))
+                result = minimize(
+                    objective,
+                    init_weights,
+                    method='SLSQP',
+                    bounds=bounds,
+                    constraints=scipy_constraints,
+                    options=options
+                )
+
+            if not result.success:
+                logger.warning(f"Optimization may not have converged: {result.message}")
 
         return result.x
 

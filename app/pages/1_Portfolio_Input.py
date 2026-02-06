@@ -157,7 +157,7 @@ with tab1:
 
     # Analyze and fetch data button
     st.markdown("---")
-    if st.button("📊 Analyze My Portfolio & Fetch Data", type="primary", use_container_width=True):
+    if st.button("📊 Analyze My Portfolio & Fetch Data", type="primary", width="stretch"):
         # Fetch prices AND historical data for holdings
         if not st.session_state.current_holdings:
             st.error("Please add at least one holding first!")
@@ -286,7 +286,7 @@ with tab1:
         display_df['Value'] = display_df['Value'].apply(lambda x: f"${x:,.2f}")
         display_df['Weight'] = display_df['Weight'].apply(lambda x: f"{x*100:.1f}%")
 
-        st.dataframe(display_df, use_container_width=True)
+        st.dataframe(display_df, width="stretch")
 
         # Detailed metrics
         with st.expander("Detailed Diversity Metrics", expanded=False):
@@ -332,7 +332,7 @@ with tab2:
     )
 
     # Fetch data button
-    if st.button("Fetch Data & Continue", type="primary", use_container_width=True):
+    if st.button("Fetch Data & Continue", type="primary", width="stretch"):
         if not ticker_input.strip():
             st.error("Please enter at least one ticker symbol.")
         else:
@@ -491,4 +491,4 @@ if st.session_state.portfolio_data is not None:
             'Sharpe': (returns.mean() * 252) / (returns.std() * np.sqrt(252)),
         }).round(4)
 
-        st.dataframe(stats.T, use_container_width=True)
+        st.dataframe(stats.T, width="stretch")

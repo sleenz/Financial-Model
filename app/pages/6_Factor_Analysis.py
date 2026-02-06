@@ -122,7 +122,7 @@ with tab1:
                 )
                 fig.add_hline(y=0, line_dash="dash", line_color="gray")
                 fig.update_layout(showlegend=False)
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
                 # Factor details table
                 st.dataframe(
@@ -131,7 +131,7 @@ with tab1:
                         'T-Stat': '{:.2f}',
                         'P-Value': '{:.4f}'
                     }),
-                    use_container_width=True
+                    width="stretch"
                 )
 
                 # Factor contribution
@@ -159,7 +159,7 @@ with tab1:
                     names='Factor',
                     title='Return Attribution'
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
                 # Individual asset analysis
                 if show_individual:
@@ -167,7 +167,7 @@ with tab1:
                     all_assets = analyzer.analyze_all_assets(model)
                     st.dataframe(
                         all_assets.style.format('{:.3f}'),
-                        use_container_width=True
+                        width="stretch"
                     )
 
                 # Store for other tabs
@@ -201,7 +201,7 @@ with tab2:
                         names=sector_weights.index,
                         title='Portfolio Sector Allocation'
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
                 with col2:
                     st.subheader("Sector Contribution to Return")
@@ -214,7 +214,7 @@ with tab2:
                     fig.update_traces(marker_color=np.where(
                         sector_contrib['Contribution'] >= 0, 'green', 'red'
                     ))
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
                 # Sector details table
                 st.subheader("Sector Performance Details")
@@ -231,7 +231,7 @@ with tab2:
                         'Volatility': '{:.2f}%',
                         'Contribution': '{:.2f}%'
                     }),
-                    use_container_width=True
+                    width="stretch"
                 )
 
                 # Brinson Attribution
@@ -274,7 +274,7 @@ with tab2:
 
                 st.dataframe(
                     display_detailed.style.format('{:.2f}%'),
-                    use_container_width=True
+                    width="stretch"
                 )
 
                 # Sector correlation
@@ -287,7 +287,7 @@ with tab2:
                     aspect='auto',
                     title='Sector Correlation'
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
             except Exception as e:
                 st.error(f"Error in sector attribution: {str(e)}")
@@ -341,7 +341,7 @@ with tab3:
                         title='Portfolio Factor Exposures'
                     )
                     fig.add_hline(y=0, line_dash="dash")
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
                 with col2:
                     # Tilt comparison
@@ -363,13 +363,13 @@ with tab3:
                         title='Portfolio vs Equal Weight',
                         barmode='group'
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
                 # Factor scores by asset
                 st.subheader("Asset Factor Scores")
                 st.dataframe(
                     factors.style.format('{:.3f}').background_gradient(cmap='RdYlGn', axis=0),
-                    use_container_width=True
+                    width="stretch"
                 )
 
                 # Return attribution
@@ -394,7 +394,7 @@ with tab3:
                     y='Contribution',
                     title='Expected Return Contribution by Factor (%)'
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
                 st.metric(
                     "Total Factor-Based Expected Return",
@@ -411,7 +411,7 @@ with tab3:
                     aspect='auto',
                     title='Style Factor Correlations'
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
                 # Top stocks by factor
                 st.subheader("Top Stocks by Factor")
@@ -421,7 +421,7 @@ with tab3:
                 )
 
                 top_stocks = analyzer.top_factor_stocks(selected_factor, n=5)
-                st.dataframe(top_stocks, use_container_width=True)
+                st.dataframe(top_stocks, width="stretch")
 
             except Exception as e:
                 st.error(f"Error in style analysis: {str(e)}")
@@ -474,7 +474,7 @@ with tab4:
                         title='Risk Decomposition',
                         color_discrete_sequence=['#FF6B6B', '#4ECDC4']
                     )
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
                 with col2:
                     # Factor betas
@@ -493,7 +493,7 @@ with tab4:
                         color_continuous_scale='RdYlGn'
                     )
                     fig.add_hline(y=0, line_dash="dash")
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
                 # Factor risk contributions
                 st.subheader("Factor Risk Contributions")
@@ -514,7 +514,7 @@ with tab4:
                     y='% of Systematic',
                     title='Factor Contribution to Systematic Risk (%)'
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
                 # Factor stress scenarios
                 st.subheader("Factor Stress Scenarios")
@@ -528,11 +528,11 @@ with tab4:
                     color='Impact %',
                     color_continuous_scale='RdYlGn'
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
                 st.dataframe(
                     stress_results.style.format({'Portfolio Impact': '{:.4f}', 'Impact %': '{:.2f}%'}),
-                    use_container_width=True
+                    width="stretch"
                 )
 
                 # Factor correlation
@@ -545,7 +545,7 @@ with tab4:
                     aspect='auto',
                     title='Factor Correlations'
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
             except Exception as e:
                 st.error(f"Error in risk decomposition: {str(e)}")
