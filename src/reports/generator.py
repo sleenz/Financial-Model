@@ -100,6 +100,16 @@ class ReportGenerator:
             textColor=colors.HexColor('#16213e')
         ))
 
+        # Subsection header
+        self.styles.add(ParagraphStyle(
+            name='SubsectionHeader',
+            parent=self.styles['Heading3'],
+            fontSize=13,
+            spaceBefore=15,
+            spaceAfter=8,
+            textColor=colors.HexColor('#2c3e50')
+        ))
+
         # Metric label
         self.styles.add(ParagraphStyle(
             name='MetricLabel',
@@ -156,6 +166,11 @@ class ReportGenerator:
             color=colors.HexColor('#e0e0e0'),
             spaceAfter=10
         ))
+
+    def add_subsection_header(self, text: str):
+        """Add a subsection header."""
+        self.elements.append(Paragraph(text, self.styles['SubsectionHeader']))
+        self.elements.append(Spacer(1, 0.05 * inch))
 
     def add_paragraph(self, text: str, style: str = 'Normal'):
         """Add a paragraph of text."""
