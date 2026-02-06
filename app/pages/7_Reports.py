@@ -14,6 +14,10 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+from src.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 st.set_page_config(page_title="Reports", page_icon="📄", layout="wide")
 
 st.title("📄 Report Generation")
@@ -59,7 +63,8 @@ try:
     from src.reports.templates import (
         PortfolioSummaryTemplate,
         PerformanceReviewTemplate,
-        RiskDashboardTemplate
+        RiskDashboardTemplate,
+        ComprehensiveProfessionalTemplate
     )
     from src.reports.charts import ReportChartGenerator
     REPORTLAB_AVAILABLE = True
@@ -88,6 +93,7 @@ st.subheader("Select Report Type")
 report_type = st.selectbox(
     "Report Type",
     [
+        "Comprehensive Professional Report",
         "Portfolio Summary",
         "Performance Review",
         "Risk Dashboard",
@@ -203,7 +209,54 @@ if st.button("Generate Report", type="primary", width="stretch"):
                         chart_images[key] = func()
 
             # Build appropriate template
-            if report_type == "Portfolio Summary":
+            if report_type == "Comprehensive Professional Report":
+                # Fetch fundamentals for all holdings
+                fundamentals_data = {}
+
+                with st.spinner("Analyzing fundamentals for all holdings..."):
+                    try:
+                        from src.fundamentals.analyzer import FundamentalsAnalyzer
+
+                        for ticker in weights.index:
+                            try:
+                                analyzer = FundamentalsAnalyzer(ticker)
+                                if analyzer.fetch_data():
+                                    fundamentals_data[ticker] = analyzer.generate_summary()
+                                else:
+                                    fundamentals_data[ticker] = None
+                            except Exception as e:
+                                logger.warning(f"Could not fetch fundamentals for {ticker}: {e}")
+                                fundamentals_data[ticker] = None
+                    except ImportError:
+                        st.warning("Fundamentals analysis requires yfinance. Install with: pip install yfinance")
+                        fundamentals_data = None
+
+                # Get holdings shares if available
+                holdings_shares = None
+                if 'current_holdings' in st.session_state:
+                    holdings_shares = st.session_state.current_holdings
+
+                # Get optimization result if available
+                optimization_result = st.session_state.get('optimization_result', None)
+
+                # Get stress results if available
+                stress_results = st.session_state.get('stress_results', None)
+
+                template = ComprehensiveProfessionalTemplate(generator)
+                template.build(
+                    weights=weights,
+                    returns=returns,
+                    prices=prices,
+                    metrics=metrics,
+                    portfolio_value=portfolio_value,
+                    fundamentals_data=fundamentals_data,
+                    chart_images=chart_images,
+                    holdings_shares=holdings_shares,
+                    optimization_result=optimization_result,
+                    stress_results=stress_results
+                )
+
+            elif report_type == "Portfolio Summary":
                 template = PortfolioSummaryTemplate(generator)
                 template.build(
                     weights=weights,
@@ -301,6 +354,16 @@ if 'generated_report' in st.session_state:
 with st.expander("Report Templates Information"):
     st.markdown("""
     ### Available Report Types
+
+    **Comprehensive Professional Report** ⭐ NEW
+    - Executive summary with key findings and recommendations
+    - Portfolio overview with diversification analysis
+    - Detailed holdings analysis with fundamentals for each stock
+    - Performance analysis with multiple charts
+    - Risk analysis with VaR, correlations, and stress tests
+    - Optimization recommendations (if available)
+    - Methodology and disclaimer sections
+    - Professional formatting suitable for client presentations
 
     **Portfolio Summary**
     - Executive summary with key metrics
