@@ -61,7 +61,7 @@ class HoldingsTracker:
         df = pd.DataFrame(data).set_index('Ticker')
 
         # Calculate weights
-        total_value = df['Value'].sum()
+        total_value = float(df['Value'].sum())
         if total_value > 0:
             df['Weight'] = df['Value'] / total_value
         else:
@@ -78,7 +78,7 @@ class HoldingsTracker:
             Total value in dollars
         """
         df = self.get_holdings_dataframe()
-        return df['Value'].sum()
+        return float(df['Value'].sum())
 
     def calculate_diversity_metrics(self) -> Dict:
         """
@@ -100,7 +100,7 @@ class HoldingsTracker:
         """
         df = self.get_holdings_dataframe()
 
-        if df.empty or df['Value'].sum() == 0:
+        if df.empty or float(df['Value'].sum()) == 0:
             return {
                 'num_holdings': 0,
                 'herfindahl_index': 0.0,
