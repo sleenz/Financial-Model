@@ -121,6 +121,20 @@ def _safe_float(value) -> Optional[float]:
         return None
 
 
+def _coalesce(*values) -> Optional[float]:
+    """
+    Return the first non-None value from the argument list.
+
+    Unlike Python's ``or`` operator, this preserves legitimate zero values:
+    ``_coalesce(0.0, 1.0)`` returns ``0.0``, not ``1.0``.
+    Use this for financial metrics (debt, cash, FCF) where zero is a real value.
+    """
+    for v in values:
+        if v is not None:
+            return v
+    return None
+
+
 def _info_val(info: dict, *keys: str) -> Optional[float]:
     """Try multiple keys in the yfinance info dict; return the first valid float."""
     for key in keys:
@@ -193,9 +207,11 @@ def _fetch_all(ticker: str) -> dict:
     """
     Fetch all yfinance data objects for a ticker in a single Ticker call.
 
-    Returns a dict with keys: t, info, fin, q_fin, bs, q_bs, cf, q_cf.
-    Wraps the call in try/except so callers only need to handle higher-level
-    logic errors.
+    Returns a dict with keys: t, info, fin, q_fin, bs, cf, q_cf.
+    The ``t`` key holds the raw Ticker object so callers can make additional
+    requests (e.g. ``.history()``) without creating a second network object.
+    Quarterly balance-sheet data is intentionally excluded — the annual
+    balance sheet (``bs``) is used for all point-in-time balance items.
     """
     t = yf.Ticker(ticker)
     return {
@@ -204,7 +220,6 @@ def _fetch_all(ticker: str) -> dict:
         "fin": t.financials,
         "q_fin": t.quarterly_financials,
         "bs": t.balance_sheet,
-        "q_bs": t.quarterly_balance_sheet,
         "cf": t.cashflow,
         "q_cf": t.quarterly_cashflow,
     }
@@ -268,28 +283,27 @@ def magic_formula_screen(tickers: list[str]) -> pd.DataFrame:
                 continue
 
             # ── EBITDA for distress filter ────────────────────────────────────
-            ebitda = (
-                _info_val(info, "ebitda")
-                or _ttm_sum(q_fin, fin, "EBITDA", "Ebitda",
-                            "Normalized EBITDA")
+            ebitda = _coalesce(
+                _info_val(info, "ebitda"),
+                _ttm_sum(q_fin, fin, "EBITDA", "Ebitda", "Normalized EBITDA"),
             )
 
             # ── Balance sheet items ───────────────────────────────────────────
-            total_debt = (
-                _info_val(info, "totalDebt")
-                or _latest(_get_stmt_row(bs, "Total Debt",
-                                         "Long Term Debt And Capital Lease Obligation"))
-                or 0.0
+            total_debt = _coalesce(
+                _info_val(info, "totalDebt"),
+                _latest(_get_stmt_row(bs, "Total Debt",
+                                      "Long Term Debt And Capital Lease Obligation")),
+                0.0,
             )
-            cash = (
-                _info_val(info, "totalCash")
-                or _latest(_get_stmt_row(
+            cash = _coalesce(
+                _info_val(info, "totalCash"),
+                _latest(_get_stmt_row(
                     bs,
                     "Cash And Cash Equivalents",
                     "Cash Cash Equivalents And Short Term Investments",
                     "Cash And Short Term Investments",
-                ))
-                or 0.0
+                )),
+                0.0,
             )
 
             # ── Filter: distressed debt ───────────────────────────────────────
@@ -437,25 +451,25 @@ def multi_factor_score(
     # ── Shared computations ───────────────────────────────────────────────────
     mkt_cap = _info_val(info, "marketCap")
     ebit = _ttm_sum(q_fin, fin, "Operating Income", "Ebit", "EBIT")
-    ebitda = (
-        _info_val(info, "ebitda")
-        or _ttm_sum(q_fin, fin, "EBITDA", "Ebitda", "Normalized EBITDA")
+    ebitda = _coalesce(
+        _info_val(info, "ebitda"),
+        _ttm_sum(q_fin, fin, "EBITDA", "Ebitda", "Normalized EBITDA"),
     )
-    total_debt = (
-        _info_val(info, "totalDebt")
-        or _latest(_get_stmt_row(bs, "Total Debt",
-                                  "Long Term Debt And Capital Lease Obligation"))
-        or 0.0
+    total_debt = _coalesce(
+        _info_val(info, "totalDebt"),
+        _latest(_get_stmt_row(bs, "Total Debt",
+                              "Long Term Debt And Capital Lease Obligation")),
+        0.0,
     )
-    cash = (
-        _info_val(info, "totalCash")
-        or _latest(_get_stmt_row(
+    cash = _coalesce(
+        _info_val(info, "totalCash"),
+        _latest(_get_stmt_row(
             bs,
             "Cash And Cash Equivalents",
             "Cash Cash Equivalents And Short Term Investments",
             "Cash And Short Term Investments",
-        ))
-        or 0.0
+        )),
+        0.0,
     )
     ev = (mkt_cap + total_debt - cash) if mkt_cap else None
 
@@ -531,9 +545,9 @@ def multi_factor_score(
     n_attempted += 1
     fcf_ni_pts: Optional[float] = None
     try:
-        fcf_ttm = (
-            _info_val(info, "freeCashflow")
-            or _ttm_sum(q_cf, cf, "Free Cash Flow", "FreeCashFlow")
+        fcf_ttm = _coalesce(
+            _info_val(info, "freeCashflow"),
+            _ttm_sum(q_cf, cf, "Free Cash Flow", "FreeCashFlow"),
         )
         ni_ttm = _ttm_sum(
             q_fin, fin,
@@ -586,9 +600,9 @@ def multi_factor_score(
     n_attempted += 1
     fcf_yield_pts: Optional[float] = None
     try:
-        fcf_ttm = (
-            _info_val(info, "freeCashflow")
-            or _ttm_sum(q_cf, cf, "Free Cash Flow", "FreeCashFlow")
+        fcf_ttm = _coalesce(
+            _info_val(info, "freeCashflow"),
+            _ttm_sum(q_cf, cf, "Free Cash Flow", "FreeCashFlow"),
         )
         if fcf_ttm is not None and mkt_cap and mkt_cap > 0:
             fcf_yield = (fcf_ttm / mkt_cap) * 100  # as %
@@ -637,7 +651,7 @@ def multi_factor_score(
     sma_pts: Optional[float] = None
     mom_pts: Optional[float] = None
     try:
-        hist = yf.Ticker(ticker).history(period="15mo", auto_adjust=True)
+        hist = d["t"].history(period="15mo", auto_adjust=True)
         close = hist["Close"].dropna()
 
         if len(close) >= 200:
@@ -728,19 +742,20 @@ def multi_factor_score(
             q_fin, fin,
             "Net Income", "Net Income From Continuing Operations",
         )
-        ocf_ttm = (
-            _info_val(info, "operatingCashflow")
-            or _ttm_sum(
+        ocf_ttm = _coalesce(
+            _info_val(info, "operatingCashflow"),
+            _ttm_sum(
                 q_cf, cf,
                 "Operating Cash Flow", "Cash From Operations",
                 "Total Cash From Operating Activities",
-            )
+            ),
         )
         ta_row = _get_stmt_row(bs, "Total Assets")
         if ta_row is not None and len(ta_row) >= 2:
             avg_ta = (float(ta_row.iloc[0]) + float(ta_row.iloc[1])) / 2.0
             if ni_ttm is not None and ocf_ttm is not None and avg_ta > 0:
-                sloan = abs((ni_ttm - ocf_ttm) / avg_ta) * 100  # as %
+                # Signed ratio: high positive = NI far exceeds OCF = poor quality
+                sloan = ((ni_ttm - ocf_ttm) / avg_ta) * 100  # as %
                 sloan_pts = 4.0 if sloan < 2 else (2.0 if sloan < 5 else 0.0)
                 growth_pts += sloan_pts
                 n_fetched += 1
@@ -864,10 +879,10 @@ def reverse_dcf(ticker: str, wacc: float = 0.10) -> dict:
         return result
 
     try:
-        t_obj = yf.Ticker(ticker)
-        info = t_obj.info or {}
-        cf = t_obj.cashflow
-        q_cf = t_obj.quarterly_cashflow
+        d = _fetch_all(ticker)
+        info = d["info"]
+        cf = d["cf"]
+        q_cf = d["q_cf"]
 
         # ── Market cap ───────────────────────────────────────────────────────
         mkt_cap = _info_val(info, "marketCap")
@@ -876,9 +891,9 @@ def reverse_dcf(ticker: str, wacc: float = 0.10) -> dict:
             return result
 
         # ── TTM FCF ──────────────────────────────────────────────────────────
-        fcf = (
-            _info_val(info, "freeCashflow")
-            or _ttm_sum(q_cf, cf, "Free Cash Flow", "FreeCashFlow")
+        fcf = _coalesce(
+            _info_val(info, "freeCashflow"),
+            _ttm_sum(q_cf, cf, "Free Cash Flow", "FreeCashFlow"),
         )
         if fcf is None or fcf <= 0:
             result["warnings"] = "FCF not available or ≤ 0; DCF requires positive FCF"
