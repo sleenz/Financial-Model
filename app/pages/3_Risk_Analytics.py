@@ -293,7 +293,10 @@ def _mc_sim(ret_arr: np.ndarray, w_tuple: tuple, n: int = 5000, seed: int = 42):
     rng = np.random.default_rng(seed)
     w = np.array(w_tuple)
     port_rets = ret_arr @ w
-    return rng.normal(port_rets.mean(), port_rets.std(), n)
+    port_rets = port_rets[~np.isnan(port_rets)]   # drop NaN rows
+    mu = float(np.mean(port_rets)) if len(port_rets) > 0 else 0.0
+    sigma = float(np.std(port_rets, ddof=1)) if len(port_rets) > 1 else 1e-8
+    return rng.normal(mu, sigma, n)
 
 
 # ── Module 2: Deep Risk Analysis ──────────────────────────────────────────────

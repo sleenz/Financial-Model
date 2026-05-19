@@ -284,11 +284,11 @@ if st.button("Analyse Hedging Effectiveness", key="hedge_stress_btn"):
                 _cum = (_window + 1).prod() - 1
                 _port_cum = float((_port_ret_stress.loc[_start:_end] + 1).prod() - 1)
 
-                # Identify best hedge (most negative return among hedge assets)
+                # Identify best hedge (highest return = best offset of portfolio loss)
                 _best_hedge = None
-                _best_ret = float("inf")
+                _best_ret = float("-inf")
                 for _hc in _hedge_assets:
-                    if _hc in _cum.index and float(_cum[_hc]) < _best_ret:
+                    if _hc in _cum.index and float(_cum[_hc]) > _best_ret:
                         _best_ret = float(_cum[_hc])
                         _best_hedge = _hc
 
@@ -338,7 +338,9 @@ if st.button("Analyse Hedging Effectiveness", key="hedge_stress_btn"):
                                 _hc_ret = float(_cum_s[_hc])
                                 _hc_idx = _ticker_list.index(_hc)
                                 _hc_wt = float(weights[_hc_idx])
-                                _offset = -_hc_ret * _hc_wt
+                                # positive _hc_ret means the hedge gained → offset loss
+                                # negative _hc_ret means the hedge also lost → made it worse
+                                _offset = _hc_ret * _hc_wt
                                 _eff_scores[_hc] = round(
                                     _offset / abs(_sd["port_cum"]) * 100, 2
                                 )
