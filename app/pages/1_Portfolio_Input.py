@@ -14,7 +14,7 @@ from src.data.data_manager import DataManager
 from src.utils.helpers import validate_tickers
 from src.portfolio.holdings import HoldingsTracker
 
-st.set_page_config(page_title="Portfolio Input", page_icon="📝", layout="wide")
+st.set_page_config(page_title="Portfolio Input", page_icon=None, layout="wide")
 
 st.title("Portfolio Input")
 st.markdown("Enter your current holdings or tickers to begin optimization.")
@@ -81,7 +81,7 @@ if period != "Custom":
 st.markdown("---")
 
 # Two input methods with tabs
-tab1, tab2 = st.tabs(["📊 Option 1: My Current Holdings", "📝 Option 2: Manual Ticker Entry"])
+tab1, tab2 = st.tabs([" Option 1: My Current Holdings", " Option 2: Manual Ticker Entry"])
 
 with tab1:
     st.markdown("""
@@ -157,7 +157,7 @@ with tab1:
 
     # Analyze and fetch data button
     st.markdown("---")
-    if st.button("📊 Analyze My Portfolio & Fetch Data", type="primary", use_container_width=True):
+    if st.button(" Analyze My Portfolio & Fetch Data", type="primary", use_container_width=True):
         # Fetch prices AND historical data for holdings
         if not st.session_state.current_holdings:
             st.error("Please add at least one holding first!")
@@ -177,9 +177,9 @@ with tab1:
                     )
 
                     # Debug: Show what we got
-                    st.write(f"✓ Fetched data for {len(prices.columns)} tickers: {list(prices.columns)}")
-                    st.write(f"✓ Date range: {prices.index[0].date()} to {prices.index[-1].date()}")
-                    st.write(f"✓ Total rows: {len(prices)}")
+                    st.write(f" Fetched data for {len(prices.columns)} tickers: {list(prices.columns)}")
+                    st.write(f" Date range: {prices.index[0].date()} to {prices.index[-1].date()}")
+                    st.write(f" Total rows: {len(prices)}")
 
                     # Calculate returns
                     returns = prices.pct_change().dropna()
@@ -210,7 +210,7 @@ with tab1:
                         st.write(f"- {ticker}: {row['Shares']:.2f} shares × ${row['Price']:.2f} = ${row['Value']:.2f} ({row['Weight']*100:.1f}%)")
 
                     if total_value == 0:
-                        st.error("⚠️ Total portfolio value is $0. This means prices were not fetched correctly.")
+                        st.error("Total portfolio value is $0. This means prices were not fetched correctly.")
                         st.warning("Possible issues: Invalid ticker symbols, no data available for date range, or API limits reached.")
 
                     current_weights = holdings_df['Weight']
@@ -233,8 +233,8 @@ with tab1:
                     st.session_state.prices = prices
                     st.session_state.portfolio_value = total_value
 
-                    st.success(f"✓ Portfolio analyzed! Total value: ${total_value:,.2f}")
-                    st.info("📈 Your portfolio data is ready. You can now access:")
+                    st.success(f"Portfolio analyzed! Total value: ${total_value:,.2f}")
+                    st.info("Your portfolio data is ready. You can now access:")
                     st.write("- **Optimization**: See rebalancing recommendations")
                     st.write("- **Risk Analytics**: Analyze VaR, CVaR, drawdowns")
                     st.write("- **Stress Testing**: Test portfolio under scenarios")
@@ -243,7 +243,7 @@ with tab1:
                     st.write("- **Reports**: Generate comprehensive reports")
 
             except Exception as e:
-                st.error(f"❌ Error fetching data: {e}")
+                st.error(f"Error fetching data: {e}")
                 st.warning("Common issues:")
                 st.write("- Invalid ticker symbols (check spelling)")
                 st.write("- Ticker not available in data sources")
@@ -256,7 +256,7 @@ with tab1:
     # Show diversity analysis if available
     if st.session_state.holdings_tracker is not None:
         st.markdown("---")
-        st.subheader("📈 Portfolio Diversity Analysis")
+        st.subheader(" Portfolio Diversity Analysis")
 
         tracker = st.session_state.holdings_tracker
         metrics = tracker.calculate_diversity_metrics()
@@ -455,7 +455,7 @@ st.markdown("---")
 
 # Show current data status
 if st.session_state.portfolio_data is not None:
-    st.subheader("✅ Portfolio Data Ready")
+    st.subheader(" Portfolio Data Ready")
 
     data = st.session_state.portfolio_data
     col1, col2, col3, col4 = st.columns(4)
@@ -476,9 +476,9 @@ if st.session_state.portfolio_data is not None:
 
     # Show mode
     if st.session_state.current_portfolio_weights is not None:
-        st.info("📊 **Mode: Rebalancing from Current Holdings** - The optimizer will show you how to adjust your existing positions.")
+        st.info("**Mode: Rebalancing from Current Holdings** - The optimizer will show you how to adjust your existing positions.")
     else:
-        st.info("🆕 **Mode: New Portfolio** - The optimizer will suggest an optimal allocation from scratch.")
+        st.info("**Mode: New Portfolio** - The optimizer will suggest an optimal allocation from scratch.")
 
     # Quick stats
     with st.expander("View Price Statistics", expanded=False):

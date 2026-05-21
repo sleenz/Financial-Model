@@ -15,7 +15,7 @@ from src.optimization.optimizers import PortfolioOptimizer
 from src.optimization.constraints import PortfolioConstraints
 from src.portfolio.calculator import PositionCalculator
 
-st.set_page_config(page_title="Optimization", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Optimization", page_icon=None, layout="wide")
 
 st.title("Portfolio Optimization")
 
@@ -118,7 +118,7 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
 
     # Rebalancing Section (if user has current holdings)
     if st.session_state.get('current_portfolio_weights') is not None:
-        st.subheader("🔄 Rebalancing Recommendations")
+        st.subheader(" Rebalancing Recommendations")
 
         current_weights = st.session_state.current_portfolio_weights
         optimal_weights = weights
@@ -207,7 +207,7 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
 
         with col1:
             if not buy_positions.empty:
-                st.markdown("**📈 Buy:**")
+                st.markdown("** Buy:**")
                 for ticker, row in buy_positions.iterrows():
                     st.write(f"- **{ticker}**: Buy {row['Shares to Trade']:.0f} shares")
             else:
@@ -215,7 +215,7 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
 
         with col2:
             if not sell_positions.empty:
-                st.markdown("**📉 Sell:**")
+                st.markdown("** Sell:**")
                 for ticker, row in sell_positions.iterrows():
                     st.write(f"- **{ticker}**: Sell {abs(row['Shares to Trade']):.0f} shares")
             else:

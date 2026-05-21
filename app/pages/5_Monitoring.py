@@ -12,7 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from src.portfolio.rebalancer import PortfolioRebalancer, PerformanceAttributor, DCAScheduler
 
-st.set_page_config(page_title="Monitoring", page_icon="📋", layout="wide")
+st.set_page_config(page_title="Monitoring", page_icon=None, layout="wide")
 
 st.title("Portfolio Monitoring")
 
@@ -28,17 +28,17 @@ prices = data['prices']
 # Get target and current weights
 if 'optimization_result' in st.session_state and st.session_state.optimization_result:
     target_weights = st.session_state.optimization_result['weights']
-    st.info("📊 Monitoring **optimized portfolio**")
+    st.info("Monitoring **optimized portfolio**")
 else:
     target_weights = pd.Series(1/len(returns.columns), index=returns.columns)
-    st.warning("⚠️ Using equal weights as target (run optimization for custom allocation)")
+    st.warning("Using equal weights as target (run optimization for custom allocation)")
 
 # Check if we have actual current holdings
 has_current_holdings = ('current_portfolio_weights' in st.session_state and
                         st.session_state.current_portfolio_weights is not None)
 
 if has_current_holdings:
-    st.success("💼 You have current holdings entered - using actual portfolio for monitoring")
+    st.success("You have current holdings entered - using actual portfolio for monitoring")
 
 st.markdown("---")
 

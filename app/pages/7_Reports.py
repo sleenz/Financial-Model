@@ -14,9 +14,9 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-st.set_page_config(page_title="Reports", page_icon="📄", layout="wide")
+st.set_page_config(page_title="Reports", page_icon=None, layout="wide")
 
-st.title("📄 Report Generation")
+st.title(" Report Generation")
 st.markdown("Generate professional PDF reports for your portfolio analysis")
 
 # Check for required session state
@@ -32,7 +32,7 @@ prices = data.get('prices')
 if 'optimization_result' in st.session_state and st.session_state.optimization_result:
     weights = st.session_state.optimization_result['weights']
     metrics = st.session_state.get('metrics', {})
-    st.info("📊 Generating report for **optimized portfolio**")
+    st.info("Generating report for **optimized portfolio**")
 elif 'current_portfolio_weights' in st.session_state and st.session_state.current_portfolio_weights is not None:
     weights = st.session_state.current_portfolio_weights
     # Calculate metrics for current holdings
@@ -42,7 +42,7 @@ elif 'current_portfolio_weights' in st.session_state and st.session_state.curren
         'annual_volatility': portfolio_returns.std() * np.sqrt(252),
         'sharpe_ratio': (portfolio_returns.mean() * 252) / (portfolio_returns.std() * np.sqrt(252))
     }
-    st.info("💼 Generating report for **your current holdings**")
+    st.info("Generating report for **your current holdings**")
 else:
     weights = pd.Series(1/len(returns.columns), index=returns.columns)
     portfolio_returns = returns.mean(axis=1)
@@ -51,7 +51,7 @@ else:
         'annual_volatility': portfolio_returns.std() * np.sqrt(252),
         'sharpe_ratio': (portfolio_returns.mean() * 252) / (portfolio_returns.std() * np.sqrt(252))
     }
-    st.warning("⚠️ Using equal weights. Enter holdings or run optimization for accurate report.")
+    st.warning("Using equal weights. Enter holdings or run optimization for accurate report.")
 
 # Check if reportlab is available
 try:
@@ -282,7 +282,7 @@ if 'generated_report' in st.session_state:
 
     with col2:
         st.download_button(
-            label="📥 Download PDF Report",
+            label=" Download PDF Report",
             data=st.session_state['generated_report'],
             file_name=st.session_state.get('report_filename', 'portfolio_report.pdf'),
             mime="application/pdf",

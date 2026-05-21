@@ -20,9 +20,9 @@ from src.factors.attribution import SectorAttribution, BrinsonAttribution
 from src.factors.style import StyleFactorAnalyzer
 from src.factors.decomposition import FactorRiskDecomposition
 
-st.set_page_config(page_title="Factor Analysis", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Factor Analysis", page_icon=None, layout="wide")
 
-st.title("📊 Factor Analysis")
+st.title(" Factor Analysis")
 st.markdown("Analyze what's driving your portfolio returns")
 
 # Check for required session state
@@ -37,13 +37,13 @@ prices = data.get('prices')
 # Get weights based on what's available
 if 'optimization_result' in st.session_state and st.session_state.optimization_result:
     weights = st.session_state.optimization_result['weights']
-    st.info("📊 Analyzing **optimized portfolio** factor exposures")
+    st.info("Analyzing **optimized portfolio** factor exposures")
 elif 'current_portfolio_weights' in st.session_state and st.session_state.current_portfolio_weights is not None:
     weights = st.session_state.current_portfolio_weights
-    st.info("💼 Analyzing **your current holdings** factor exposures")
+    st.info("Analyzing **your current holdings** factor exposures")
 else:
     weights = pd.Series(1/len(returns.columns), index=returns.columns)
-    st.warning("⚠️ Using equal weights. Enter holdings or run optimization for accurate analysis.")
+    st.warning("Using equal weights. Enter holdings or run optimization for accurate analysis.")
 
 # Tabs for different analyses
 tab1, tab2, tab3, tab4 = st.tabs([
