@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from src.simulation.scenarios import StressTester, HISTORICAL_SCENARIOS, list_scenarios
 from src.simulation.monte_carlo import MonteCarloSimulator
 
-st.set_page_config(page_title="Stress Testing", page_icon="⚠️", layout="wide")
+st.set_page_config(page_title="Stress Testing", page_icon=None, layout="wide")
 
 st.title("Stress Testing & Scenario Analysis")
 
@@ -28,13 +28,13 @@ returns = data['returns']
 # Get weights based on what's available
 if 'optimization_result' in st.session_state and st.session_state.optimization_result:
     weights = st.session_state.optimization_result['weights'].values
-    st.info("📊 Stress testing **optimized portfolio**")
+    st.info("Stress testing **optimized portfolio**")
 elif 'current_portfolio_weights' in st.session_state and st.session_state.current_portfolio_weights is not None:
     weights = st.session_state.current_portfolio_weights.values
-    st.info("💼 Stress testing **your current holdings**")
+    st.info("Stress testing **your current holdings**")
 else:
     weights = np.ones(len(returns.columns)) / len(returns.columns)
-    st.warning("⚠️ Using equal weights. Enter holdings or run optimization for accurate results.")
+    st.warning("Using equal weights. Enter holdings or run optimization for accurate results.")
 
 # Portfolio value
 portfolio_value = st.session_state.get('settings', {}).get('total_capital', 10000)
@@ -320,7 +320,7 @@ if st.button("Analyse Hedging Effectiveness", key="hedge_stress_btn"):
                         _bh = _sd["best_hedge"]
                         _fig_bar.add_annotation(
                             x=_bh, y=float(_cum_s[_bh]) * 100,
-                            text="★ Best Hedge", showarrow=True, arrowhead=2,
+                            text=" Best Hedge", showarrow=True, arrowhead=2,
                             font=dict(color="gold", size=13)
                         )
                     _fig_bar.update_layout(

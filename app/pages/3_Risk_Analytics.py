@@ -15,7 +15,7 @@ from src.risk.metrics import RiskMetrics
 from src.risk.var import VaRCalculator
 from src.risk.garch import GARCHModel, ewma_volatility
 
-st.set_page_config(page_title="Risk Analytics", page_icon="📊", layout="wide")
+st.set_page_config(page_title="Risk Analytics", page_icon=None, layout="wide")
 
 st.title("Risk Analytics Dashboard")
 
@@ -33,17 +33,17 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
     # Use optimized weights
     weights = st.session_state.optimization_result['weights']
     portfolio_returns = (returns * weights).sum(axis=1)
-    st.info(f"📊 Analyzing **optimized portfolio** with {(weights > 0.001).sum()} positions")
+    st.info(f"Analyzing **optimized portfolio** with {(weights > 0.001).sum()} positions")
 elif 'current_portfolio_weights' in st.session_state and st.session_state.current_portfolio_weights is not None:
     # Use actual holdings weights
     weights = st.session_state.current_portfolio_weights
     portfolio_returns = (returns * weights).sum(axis=1)
-    st.info(f"💼 Analyzing **your current holdings** with {len(weights)} positions")
+    st.info(f"Analyzing **your current holdings** with {len(weights)} positions")
 else:
     # Equal weight fallback
     weights = pd.Series(1/len(returns.columns), index=returns.columns)
     portfolio_returns = returns.mean(axis=1)
-    st.warning("⚠️ Using equal-weight portfolio. Enter holdings in Portfolio Input or run optimization for accurate analysis.")
+    st.warning("Using equal-weight portfolio. Enter holdings in Portfolio Input or run optimization for accurate analysis.")
 
 # Initialize calculators
 rm = RiskMetrics(returns)
