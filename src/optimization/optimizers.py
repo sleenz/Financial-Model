@@ -412,13 +412,24 @@ class PortfolioOptimizer:
                     method='SLSQP',
                     bounds=bounds,
                     constraints=scipy_constraints,
-                    options={'ftol': 1e-10}
+                    # maxiter must match _run_optimization; the default of 100 is
+                    # too low for frontier points which carry an extra equality
+                    # constraint and cause most points to silently time out.
+                    options={'ftol': 1e-9, 'maxiter': 1000},
                 )
 
-                if result.success:
-                    vol = result.fun
-                    ret = np.dot(result.x, self.mean_returns)
-                    sharpe = (ret - self.risk_free_rate) / vol if vol > 0 else 0
+                # Accept the solution when SLSQP converged OR when it ran out of
+                # iterations but still produced a feasible, full-investment portfolio.
+                # Using result.success alone rejects many valid near-converged points.
+                weights_feasible = abs(np.sum(result.x) - 1.0) < 1e-3
+                if result.success or (result.fun > 0 and weights_feasible):
+                    # Recompute vol directly from weights rather than trusting
+                    # result.fun, which can carry small SLSQP floating-point artifacts.
+                    vol = float(np.sqrt(
+                        np.dot(result.x.T, np.dot(self.cov_matrix, result.x))
+                    ))
+                    ret = float(np.dot(result.x, self.mean_returns))
+                    sharpe = (ret - self.risk_free_rate) / vol if vol > 0 else 0.0
 
                     frontier_data.append({
                         'return': ret,
@@ -431,7 +442,12 @@ class PortfolioOptimizer:
                 logger.debug(f"Failed to compute frontier point: {e}")
                 continue
 
-        return pd.DataFrame(frontier_data)
+        if not frontier_data:
+            return pd.DataFrame()
+
+        # Sort by volatility so the plotted line runs left-to-right without gaps.
+        df = pd.DataFrame(frontier_data)
+        return df.sort_values('volatility').reset_index(drop=True)
 
     def get_risk_contributions(self, weights: np.ndarray = None) -> pd.Series:
         """
