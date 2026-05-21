@@ -20,7 +20,7 @@ import streamlit as st
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from stock_valuer import (
+from src.valuation.stock_valuer import (
     magic_formula_screen,
     multi_factor_score,
     reverse_dcf,
