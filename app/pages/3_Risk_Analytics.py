@@ -529,7 +529,8 @@ with _tab_h2:
         st.dataframe(_hedge_df, use_container_width=True)
     with col2:
         _color_map = {"Equity": "steelblue", "Hedge / Diversifier": "seagreen"}
-        _fig_beta = px.bar(_hedge_df.reset_index(), x="index", y="Beta to Portfolio",
+        _hedge_plot = _hedge_df.reset_index().rename(columns={_hedge_df.index.name or "index": "Asset"})
+        _fig_beta = px.bar(_hedge_plot, x="Asset", y="Beta to Portfolio",
                             color="Role", color_discrete_map=_color_map,
                             title="Asset Beta to Portfolio")
         _fig_beta.update_layout(xaxis_title="Asset")

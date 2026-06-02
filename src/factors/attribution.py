@@ -6,11 +6,38 @@ Implements Brinson attribution model for decomposing portfolio returns.
 
 import numpy as np
 import pandas as pd
+import yfinance as yf
 from typing import Dict, List, Optional, Tuple
 
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Runtime cache: populated from SECTOR_MAPPINGS below plus live yfinance lookups.
+# Keyed by upper-case ticker symbol.
+_SECTOR_CACHE: Dict[str, str] = {}
+
+
+def _fetch_sector(ticker: str) -> str:
+    """
+    Return the GICS sector for a ticker.
+
+    Checks the in-process cache first (seeded from SECTOR_MAPPINGS on import).
+    On a cache miss, queries yfinance once and stores the result so subsequent
+    calls for the same ticker are free.  Falls back to 'Unknown' if yfinance
+    returns nothing useful.
+    """
+    key = ticker.upper()
+    if key in _SECTOR_CACHE:
+        return _SECTOR_CACHE[key]
+    try:
+        info = yf.Ticker(key).info or {}
+        sector = info.get("sector") or "Unknown"
+    except Exception:
+        sector = "Unknown"
+    _SECTOR_CACHE[key] = sector
+    logger.debug("Fetched sector for %s from yfinance: %s", key, sector)
+    return sector
 
 
 # GICS Sector mappings for common stocks
@@ -75,6 +102,9 @@ SECTOR_MAPPINGS = {
     'CHTR': 'Communication Services', 'ATVI': 'Communication Services'
 }
 
+# Seed the runtime cache from the static map so common tickers never hit yfinance.
+_SECTOR_CACHE.update({k.upper(): v for k, v in SECTOR_MAPPINGS.items()})
+
 # Default benchmark sector weights (approximate S&P 500)
 DEFAULT_BENCHMARK_WEIGHTS = {
     'Technology': 0.28,
@@ -112,12 +142,15 @@ class SectorAttribution:
         """
         self.returns = returns
         self.weights = weights
-        self.sector_map = sector_map or SECTOR_MAPPINGS
+        self.sector_map = sector_map or {}
 
-        # Map assets to sectors
+        # Map assets to sectors: explicit override → static cache → live yfinance lookup
         self.asset_sectors = {}
         for asset in weights.index:
-            self.asset_sectors[asset] = self.sector_map.get(asset, 'Other')
+            if asset in self.sector_map:
+                self.asset_sectors[asset] = self.sector_map[asset]
+            else:
+                self.asset_sectors[asset] = _fetch_sector(asset)
 
         logger.info(f"SectorAttribution initialized with {len(weights)} assets")
 
@@ -224,7 +257,7 @@ class BrinsonAttribution:
         """
         self.portfolio_returns = portfolio_returns
         self.portfolio_weights = portfolio_weights
-        self.sector_map = sector_map or SECTOR_MAPPINGS
+        self.sector_map = sector_map or {}
         self.benchmark_weights = benchmark_weights or DEFAULT_BENCHMARK_WEIGHTS
 
         # Get sector attribution helper
