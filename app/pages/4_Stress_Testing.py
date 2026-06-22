@@ -401,14 +401,14 @@ with tab4:
         with col_models:
             st.markdown("**Sub-model Status**")
             _sc1, _sc2, _sc3, _sc4 = st.columns(4)
-            _sc1.metric("Beta", "✅ OK" if _summary["beta"] else "❌")
-            _sc2.metric("DCC-GARCH", "✅ OK" if _summary["dcc"] else "⚠️")
-            _sc3.metric("Copula", "✅ OK" if _summary["copula"] else "⚠️")
-            _sc4.metric("HMM Regime", "✅ OK" if _summary["regime"] else "⚠️")
+            _sc1.metric("Beta", "OK" if _summary["beta"] else "BAD")
+            _sc2.metric("DCC-GARCH", "OK" if _summary["dcc"] else "WARNING")
+            _sc3.metric("Copula", "OK" if _summary["copula"] else "WARNING")
+            _sc4.metric("HMM Regime", "OK" if _summary["regime"] else "WARNING")
 
         if _summary["warnings"]:
             with st.expander(
-                f"⚠️ {len(_summary['warnings'])} fitting warning(s)", expanded=False
+                f"{len(_summary['warnings'])} fitting warning(s)", expanded=False
             ):
                 for _w in _summary["warnings"]:
                     st.warning(_w)
