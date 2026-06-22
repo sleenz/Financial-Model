@@ -12,6 +12,17 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from src.simulation.scenarios import StressTester, HISTORICAL_SCENARIOS, list_scenarios
 from src.simulation.monte_carlo import MonteCarloSimulator
+from src.simulation.sector_stress import (
+    DEFAULT_SCENARIOS,
+    SectorStressConfig,
+    SectorStressEngine,
+    SectorStressScenario,
+)
+from src.risk.dcc_garch import DCCGARCHConfig
+from src.risk.copula import CopulaConfig
+from src.risk.regime_detection import RegimeConfig
+from src.risk.sector_beta import SectorBetaConfig
+from src.data.data_manager import DataManager
 
 st.set_page_config(page_title="Stress Testing", page_icon=None, layout="wide")
 
@@ -45,7 +56,9 @@ stress_tester = StressTester(returns, weights, portfolio_value)
 st.markdown("---")
 
 # Tabs
-tab1, tab2, tab3 = st.tabs(["Historical Scenarios", "Monte Carlo", "Custom Stress"])
+tab1, tab2, tab3, tab4 = st.tabs([
+    "Historical Scenarios", "Monte Carlo", "Custom Stress", "🔬 Sector Shock"
+])
 
 with tab1:
     st.subheader("Historical Stress Scenarios")
@@ -243,6 +256,487 @@ with tab3:
         st.plotly_chart(fig, use_container_width=True)
 
         st.dataframe(sensitivity.round(2), use_container_width=True)
+
+with tab4:
+    st.subheader("Sector Shock Stress Test")
+    st.markdown(
+        "Propagates sector-level shocks through a portfolio using "
+        "**DCC-GARCH** dynamic correlations, **Student-t Copula** tail dependence, "
+        "and **HMM** regime-conditioned correlation selection."
+    )
+
+    # ── Model configuration ──────────────────────────────────────────────────
+    with st.expander("Model Configuration", expanded=False):
+        cfg_col1, cfg_col2, cfg_col3 = st.columns(3)
+
+        with cfg_col1:
+            st.markdown("**DCC-GARCH**")
+            _dcc_alpha = st.number_input(
+                "α init (news impact)", 0.01, 0.20, 0.05, step=0.01,
+                key="ss_dcc_alpha",
+            )
+            _dcc_beta = st.number_input(
+                "β init (correlation persistence)", 0.50, 0.99, 0.90, step=0.01,
+                key="ss_dcc_beta",
+            )
+            _estimate_dcc = st.checkbox("Estimate DCC params (MLE)", True, key="ss_estimate_dcc")
+
+        with cfg_col2:
+            st.markdown("**Student-t Copula**")
+            _copula_type = st.selectbox("Type", ["t", "gaussian"], key="ss_copula_type")
+            _n_sim = st.number_input(
+                "Simulation paths", 1000, 50000, 10000, step=1000, key="ss_n_sim"
+            )
+            _estimate_df = st.checkbox(
+                "Estimate degrees of freedom (MLE)", True, key="ss_estimate_df"
+            )
+
+        with cfg_col3:
+            st.markdown("**HMM Regime Detector**")
+            _n_states = st.selectbox("Number of states", [2, 3, 4], index=1, key="ss_n_states")
+            _n_init_hmm = st.number_input(
+                "HMM initialisations", 3, 20, 10, step=1, key="ss_n_init"
+            )
+
+        st.markdown("---")
+        _class_level = st.selectbox(
+            "TRBC classification level",
+            ["economic", "business", "industry"],
+            help=(
+                "economic = broadest (8-10 sectors) | "
+                "business = mid (25-30) | "
+                "industry = finest (70+)"
+            ),
+            key="ss_class_level",
+        )
+        _pv_sector = st.number_input(
+            "Portfolio value ($)",
+            min_value=1_000,
+            max_value=1_000_000_000,
+            value=int(st.session_state.get("settings", {}).get("total_capital", 1_000_000)),
+            step=10_000,
+            key="ss_portfolio_value",
+        )
+
+    # ── Fetch sectors & fit models ───────────────────────────────────────────
+    st.markdown("---")
+    _fit_clicked = st.button(
+        "Fetch Sectors & Fit Models", type="primary", key="ss_fit_btn"
+    )
+
+    if _fit_clicked:
+        _tickers = list(returns.columns)
+
+        _stress_cfg = SectorStressConfig(
+            beta_config=SectorBetaConfig(),
+            dcc_config=DCCGARCHConfig(
+                dcc_alpha_init=float(st.session_state.ss_dcc_alpha),
+                dcc_beta_init=float(st.session_state.ss_dcc_beta),
+                estimate_dcc_params=bool(st.session_state.ss_estimate_dcc),
+            ),
+            copula_config=CopulaConfig(
+                copula_type=str(st.session_state.ss_copula_type),
+                n_simulation_paths=int(st.session_state.ss_n_sim),
+                estimate_df=bool(st.session_state.ss_estimate_df),
+            ),
+            regime_config=RegimeConfig(
+                n_states=int(st.session_state.ss_n_states),
+                n_init=int(st.session_state.ss_n_init),
+            ),
+            portfolio_value=float(st.session_state.ss_portfolio_value),
+        )
+
+        with st.spinner("Fetching TRBC sector classifications (yfinance fallback)…"):
+            try:
+                _dm = DataManager(show_progress=False)
+                _sector_map = _dm.get_sector_classifications(
+                    _tickers,
+                    level=str(st.session_state.ss_class_level),
+                )
+                st.session_state.ss_sector_map = _sector_map
+                st.session_state.ss_class_level_used = st.session_state.ss_class_level
+                unique_s = sorted(set(_sector_map.values()) - {"Unknown"})
+                st.success(
+                    f"Sectors fetched: {len(unique_s)} unique — {', '.join(unique_s)}"
+                )
+            except Exception as _e:
+                st.error(f"Sector fetch failed: {_e}")
+                st.stop()
+
+        with st.spinner(
+            "Fitting DCC-GARCH → Student-t Copula → HMM Regime Detector…"
+        ):
+            try:
+                _engine = SectorStressEngine(config=_stress_cfg)
+                _engine.fit(returns, st.session_state.ss_sector_map)
+                st.session_state.ss_engine = _engine
+                st.session_state.ss_stress_cfg = _stress_cfg
+            except Exception as _e:
+                st.error(f"Model fitting failed: {_e}")
+                st.stop()
+
+        st.session_state.pop("ss_result", None)
+        st.session_state.pop("ss_all_results", None)
+        st.rerun()
+
+    # ── Regime badge + sub-model status ─────────────────────────────────────
+    if "ss_engine" in st.session_state:
+        _engine = st.session_state.ss_engine
+        _summary = _engine.get_fit_summary()
+        _regime = _summary["current_regime"]
+        _regime_prob = _summary["regime_probability"]
+
+        _REGIME_ICON = {
+            "calm": "🟢", "elevated": "🟡",
+            "mild_stress": "🟠", "crisis": "🔴", "unknown": "⚪",
+        }
+        _icon = _REGIME_ICON.get(_regime, "⚪")
+
+        col_regime, col_models = st.columns([1, 2])
+        with col_regime:
+            st.markdown("**Current Market Regime**")
+            st.markdown(f"## {_icon} {_regime.replace('_', ' ').upper()}")
+            st.markdown(f"Confidence: **{_regime_prob:.1%}**")
+
+        with col_models:
+            st.markdown("**Sub-model Status**")
+            _sc1, _sc2, _sc3, _sc4 = st.columns(4)
+            _sc1.metric("Beta", "✅ OK" if _summary["beta"] else "❌")
+            _sc2.metric("DCC-GARCH", "✅ OK" if _summary["dcc"] else "⚠️")
+            _sc3.metric("Copula", "✅ OK" if _summary["copula"] else "⚠️")
+            _sc4.metric("HMM Regime", "✅ OK" if _summary["regime"] else "⚠️")
+
+        if _summary["warnings"]:
+            with st.expander(
+                f"⚠️ {len(_summary['warnings'])} fitting warning(s)", expanded=False
+            ):
+                for _w in _summary["warnings"]:
+                    st.warning(_w)
+
+        st.markdown("---")
+
+        # ── Matrix expanders ─────────────────────────────────────────────────
+        _mx1, _mx2 = st.columns(2)
+
+        with _mx1:
+            with st.expander("Cross-Sector Beta Matrix", expanded=False):
+                if _summary["beta"] and _engine._beta_result is not None:
+                    _beta_df = _engine._beta_result.beta_matrix_average
+                    _fig_beta = px.imshow(
+                        _beta_df.round(3),
+                        color_continuous_scale="RdBu_r",
+                        color_continuous_midpoint=0,
+                        text_auto=".2f",
+                        title="Beta Matrix (1Y/3Y average)",
+                    )
+                    _fig_beta.update_layout(height=380)
+                    st.plotly_chart(_fig_beta, use_container_width=True)
+                    _n_un = _engine._beta_result.n_unstable_pairs
+                    if _n_un > 0:
+                        st.warning(f"{_n_un} unstable sector pair(s) — beta estimates may drift.")
+                else:
+                    st.info("Beta model not fitted.")
+
+        with _mx2:
+            with st.expander("DCC Correlation Matrix", expanded=False):
+                if _summary["dcc"] and _engine._dcc_result is not None:
+                    _corr_choice = st.radio(
+                        "Snapshot",
+                        ["Current", "Stress (95th %ile)", "Calm (5th %ile)"],
+                        horizontal=True,
+                        key="ss_corr_choice",
+                    )
+                    if _corr_choice == "Current":
+                        _corr_df = _engine._dcc_result.current_correlation
+                    elif "Stress" in _corr_choice:
+                        _corr_df = _engine._dcc_result.stress_correlation
+                    else:
+                        _corr_df = _engine._dcc_result.calm_correlation
+
+                    _fig_corr = px.imshow(
+                        _corr_df.round(3),
+                        color_continuous_scale="RdBu_r",
+                        color_continuous_midpoint=0,
+                        zmin=-1, zmax=1,
+                        text_auto=".2f",
+                        title="DCC Correlation",
+                    )
+                    _fig_corr.update_layout(height=380)
+                    st.plotly_chart(_fig_corr, use_container_width=True)
+                else:
+                    st.info("DCC-GARCH model not fitted.")
+
+        st.markdown("---")
+
+        # ── Scenario selector ────────────────────────────────────────────────
+        st.subheader("Scenario")
+
+        _scenario_names = [s.name for s in DEFAULT_SCENARIOS] + ["Custom…"]
+        _sel_name = st.selectbox(
+            "Select a scenario", _scenario_names, key="ss_scenario_name"
+        )
+
+        if _sel_name == "Custom…":
+            st.markdown("**Define custom shock:**")
+            _sm = st.session_state.get("ss_sector_map", {})
+            _uniq_secs = sorted(set(_sm.values()) - {"Unknown"})
+            _shock_secs = st.multiselect(
+                "Sectors to shock", _uniq_secs, key="ss_custom_secs"
+            )
+            _custom_shocks: dict = {}
+            for _s in _shock_secs:
+                _sv = (
+                    st.slider(f"{_s} shock (%)", -50, 50, -20, key=f"ss_sl_{_s}") / 100.0
+                )
+                _custom_shocks[_s] = _sv
+            _cop_q = st.slider(
+                "Copula quantile (0.05 = 5th %-ile loss tail)",
+                0.01, 0.99, 0.05, key="ss_custom_cop_q",
+            )
+            _active_scenario = SectorStressScenario(
+                name="Custom Scenario",
+                description="User-defined sector shock",
+                shocked_sectors=_custom_shocks,
+                copula_shock_quantile=_cop_q,
+            )
+        else:
+            _active_scenario = next(
+                s for s in DEFAULT_SCENARIOS if s.name == _sel_name
+            )
+            _dc1, _dc2 = st.columns([2, 1])
+            with _dc1:
+                st.markdown(f"**{_active_scenario.name}**")
+                st.caption(_active_scenario.description)
+            with _dc2:
+                st.markdown("**Sector shocks:**")
+                for _sec, _shk in _active_scenario.shocked_sectors.items():
+                    _clr = "red" if _shk < 0 else "green"
+                    st.markdown(f"- {_sec}: :{_clr}[{_shk:+.0%}]")
+
+        # ── Run buttons ───────────────────────────────────────────────────────
+        _rb1, _rb2 = st.columns(2)
+        with _rb1:
+            _run_single = st.button(
+                f"Run: {_active_scenario.name}", type="primary", key="ss_run_single"
+            )
+        with _rb2:
+            _run_all = st.button(
+                "Run All 7 Default Scenarios", key="ss_run_all"
+            )
+
+        _tickers = list(returns.columns)
+        _holdings = {t: float(w) for t, w in zip(_tickers, weights)}
+
+        if _run_single:
+            with st.spinner(f"Running '{_active_scenario.name}'…"):
+                _result = _engine.run_stress(_active_scenario, _holdings)
+                st.session_state.ss_result = _result
+
+        if _run_all:
+            with st.spinner("Running all 7 scenarios…"):
+                st.session_state.ss_all_results = _engine.run_all_scenarios(_holdings)
+
+        # ── Single scenario results ───────────────────────────────────────────
+        if "ss_result" in st.session_state:
+            _res = st.session_state.ss_result
+            _pv = st.session_state.ss_stress_cfg.portfolio_value
+
+            st.markdown("---")
+            st.subheader(f"Results — {_res.scenario.name}")
+
+            _rm1, _rm2, _rm3, _rm4 = st.columns(4)
+            _rm1.metric("Beta P&L", f"${_res.total_beta_pnl:,.0f}")
+            _rm2.metric("Copula VaR P&L", f"${_res.total_copula_pnl:,.0f}")
+            _rm3.metric(
+                "Regime",
+                f"{_res.regime_at_shock.upper()} ({_res.regime_probability:.0%})",
+            )
+            _rm4.metric("Holdings", str(len(_res.holdings_results)))
+
+            _df_res = _res.to_dataframe()
+
+            if not _df_res.empty:
+                # Waterfall chart — top 20 by |beta PnL|
+                st.markdown("#### Beta P&L Contribution (Waterfall)")
+                _wf_df = _df_res.head(20)
+                _wf_measures = ["relative"] * len(_wf_df) + ["total"]
+                _wf_x = list(_wf_df["ticker"]) + ["TOTAL"]
+                _wf_y = list(_wf_df["pnl_contribution_beta"]) + [_res.total_beta_pnl]
+                _wf_text = [
+                    (f"+${v:,.0f}" if v >= 0 else f"-${abs(v):,.0f}") for v in _wf_y
+                ]
+
+                _fig_wf = go.Figure(go.Waterfall(
+                    orientation="v",
+                    measure=_wf_measures,
+                    x=_wf_x,
+                    y=_wf_y,
+                    text=_wf_text,
+                    textposition="outside",
+                    connector={"line": {"color": "rgba(80,80,80,0.4)", "width": 1}},
+                    increasing={"marker": {"color": "#3b82f6"}},
+                    decreasing={"marker": {"color": "#ef4444"}},
+                    totals={"marker": {"color": "#374151"}},
+                ))
+                _fig_wf.update_layout(
+                    yaxis_title="P&L ($)",
+                    xaxis_title="Holding",
+                    height=460,
+                    showlegend=False,
+                    margin=dict(t=30),
+                )
+                st.plotly_chart(_fig_wf, use_container_width=True)
+
+            # Holdings table
+            st.markdown("#### Holdings Detail")
+            st.dataframe(
+                _df_res.style.format({
+                    "weight": "{:.2%}",
+                    "beta_implied_return": "{:+.2%}",
+                    "copula_median_return": "{:+.2%}",
+                    "copula_var_return": "{:+.2%}",
+                    "pnl_contribution_beta": "${:,.0f}",
+                    "pnl_contribution_copula": "${:,.0f}",
+                }),
+                use_container_width=True,
+                height=340,
+            )
+
+            # Most exposed / natural hedges
+            _exp_col, _hdg_col = st.columns(2)
+            with _exp_col:
+                st.markdown("**Most Exposed (Largest Loss)**")
+                _exposed = _engine.get_most_exposed(_res, top_n=5)
+                if not _exposed.empty:
+                    st.dataframe(
+                        _exposed.style.format(
+                            {"weight": "{:.2%}", "pnl": "${:,.0f}"}
+                        ),
+                        use_container_width=True,
+                    )
+                else:
+                    st.info("No holdings with negative P&L.")
+
+            with _hdg_col:
+                st.markdown("**Natural Hedges (Positive P&L)**")
+                _hedges = _engine.get_hedge_candidates(_res, top_n=5)
+                if not _hedges.empty:
+                    st.dataframe(
+                        _hedges.style.format({
+                            "weight": "{:.2%}",
+                            "pnl_contribution_beta": "${:,.0f}",
+                        }),
+                        use_container_width=True,
+                    )
+                else:
+                    st.info("No holdings gain under this scenario.")
+
+            # Beta stability warnings
+            _unstable = _df_res[_df_res["beta_stability"] == "unstable"]
+            if not _unstable.empty:
+                with st.expander(
+                    f"⚠️ Beta Stability Warnings ({len(_unstable)} holdings)", expanded=True
+                ):
+                    st.warning(
+                        "These holdings sit in sectors where the 1Y and 3Y beta "
+                        "estimates diverge by more than the stability threshold. "
+                        "Beta-implied P&L figures may be unreliable."
+                    )
+                    st.dataframe(
+                        _unstable[
+                            ["ticker", "sector", "beta_implied_return", "pnl_contribution_beta"]
+                        ].style.format({
+                            "beta_implied_return": "{:+.2%}",
+                            "pnl_contribution_beta": "${:,.0f}",
+                        }),
+                        use_container_width=True,
+                    )
+
+            # Copula correlation used
+            if not _res.correlation_used.empty:
+                with st.expander("Correlation Matrix Used in This Run", expanded=False):
+                    _fig_cu = px.imshow(
+                        _res.correlation_used.round(3),
+                        color_continuous_scale="RdBu_r",
+                        color_continuous_midpoint=0,
+                        zmin=-1, zmax=1,
+                        text_auto=".2f",
+                    )
+                    _fig_cu.update_layout(height=380)
+                    st.plotly_chart(_fig_cu, use_container_width=True)
+
+            # Run notes
+            if _res.warnings:
+                with st.expander(
+                    f"ℹ️ {len(_res.warnings)} scenario note(s)", expanded=False
+                ):
+                    for _w in _res.warnings:
+                        st.info(_w)
+
+        # ── Scenario comparison ──────────────────────────────────────────────
+        if "ss_all_results" in st.session_state:
+            _all = st.session_state.ss_all_results
+            _pv_cmp = (
+                st.session_state.ss_stress_cfg.portfolio_value
+                if "ss_stress_cfg" in st.session_state
+                else 1_000_000.0
+            )
+
+            st.markdown("---")
+            st.subheader("Scenario Comparison")
+
+            _cmp_rows = []
+            for _r in _all:
+                _cmp_rows.append({
+                    "Scenario": _r.scenario.name,
+                    "Beta P&L ($)": _r.total_beta_pnl,
+                    "Beta P&L (%)": _r.total_beta_pnl / _pv_cmp * 100,
+                    "Copula P&L ($)": _r.total_copula_pnl,
+                    "Copula P&L (%)": _r.total_copula_pnl / _pv_cmp * 100,
+                    "Regime": _r.regime_at_shock.upper(),
+                    "Notes": len(_r.warnings),
+                })
+
+            _cmp_df = pd.DataFrame(_cmp_rows)
+            st.dataframe(
+                _cmp_df.style.format({
+                    "Beta P&L ($)": "${:,.0f}",
+                    "Beta P&L (%)": "{:+.2f}%",
+                    "Copula P&L ($)": "${:,.0f}",
+                    "Copula P&L (%)": "{:+.2f}%",
+                }).background_gradient(subset=["Beta P&L ($)"], cmap="RdYlGn"),
+                use_container_width=True,
+            )
+
+            # Grouped bar chart
+            _fig_cmp = go.Figure()
+            _fig_cmp.add_trace(go.Bar(
+                name="Beta P&L",
+                x=_cmp_df["Scenario"],
+                y=_cmp_df["Beta P&L ($)"],
+                marker_color=[
+                    "#ef4444" if v < 0 else "#3b82f6"
+                    for v in _cmp_df["Beta P&L ($)"]
+                ],
+            ))
+            _fig_cmp.add_trace(go.Bar(
+                name="Copula VaR P&L",
+                x=_cmp_df["Scenario"],
+                y=_cmp_df["Copula P&L ($)"],
+                marker_color=[
+                    "#f97316" if v < 0 else "#22c55e"
+                    for v in _cmp_df["Copula P&L ($)"]
+                ],
+            ))
+            _fig_cmp.update_layout(
+                barmode="group",
+                xaxis_tickangle=-30,
+                yaxis_title="P&L ($)",
+                height=430,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            )
+            st.plotly_chart(_fig_cmp, use_container_width=True)
+
 
 # ── Hedging Effectiveness During Stress Events ────────────────────────────────
 st.markdown("---")
