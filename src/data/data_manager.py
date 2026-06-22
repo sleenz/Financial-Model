@@ -376,6 +376,58 @@ class DataManager:
 
         return pd.DataFrame(info_data).set_index("ticker")
 
+    def get_sector_classifications(
+        self,
+        tickers: Union[str, List[str]],
+        level: str = "economic",
+        lseg_config=None,
+    ) -> dict:
+        """
+        Fetch TRBC sector classifications for a list of tickers.
+
+        Uses LSEGSectorFetcher with automatic fallback to yfinance when the
+        LSEG Data Library is not configured or unavailable.  Results are
+        cached internally by the fetcher for lseg_config.cache_ttl_seconds
+        (default 24 h).
+
+        Args:
+            tickers: Single ticker or list of tickers.
+            level: TRBC hierarchy level — "economic" | "business" | "industry".
+            lseg_config: LSEGSectorConfig instance to override defaults.
+                If None, LSEGSectorConfig() defaults are used.
+
+        Returns:
+            dict[str, str] mapping each ticker to its sector label at the
+            requested hierarchy level.  Tickers that could not be classified
+            map to the config's unknown_sector_label (default "Unknown").
+
+        Raises:
+            ValueError: If level is not one of the accepted values.
+        """
+        from .lseg_sectors import LSEGSectorConfig, LSEGSectorFetcher
+
+        tickers = validate_tickers(tickers)
+        logger.info(
+            f"get_sector_classifications(): {len(tickers)} tickers, level='{level}'"
+        )
+
+        cfg = lseg_config if lseg_config is not None else LSEGSectorConfig()
+        fetcher = LSEGSectorFetcher(config=cfg)
+
+        try:
+            classifications = fetcher.fetch(tickers)
+        except Exception as exc:
+            logger.error(f"LSEGSectorFetcher.fetch() failed: {exc}")
+            raise
+
+        sector_map = fetcher.to_sector_map(classifications, level=level)
+        unique = fetcher.get_unique_sectors(sector_map)
+        logger.info(
+            f"get_sector_classifications(): classified {len(sector_map)} tickers — "
+            f"unique sectors: {unique}"
+        )
+        return sector_map
+
     def clear_cache(self) -> int:
         """
         Clear all cached data.
