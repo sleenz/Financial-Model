@@ -49,9 +49,12 @@ class SectorStressScenario:
     use_copula: bool = field(default=True)
     use_dcc: bool = field(default=True)
     use_regime: bool = field(default=True)
+    use_regime_correlation: bool = field(default=True)
     copula_shock_quantile: float = field(default=0.05)
     # copula_shock_quantile: CDF percentile used as the conditioning anchor.
     # Values ≤ 0.5 represent negative (loss) tails; > 0.5 represent positive.
+    beta_window: Optional[str] = field(default=None)
+    # beta_window: "short" | "long" | "average" | None (None = use SectorStressConfig default)
 
 
 DEFAULT_SCENARIOS: list[SectorStressScenario] = [
@@ -135,6 +138,70 @@ DEFAULT_SCENARIOS: list[SectorStressScenario] = [
             "Consumer Staples": -0.12,
         },
         copula_shock_quantile=0.01,
+    ),
+    SectorStressScenario(
+        name="Healthcare Policy Shock",
+        shocked_sectors={"Healthcare": -0.20},
+        description=(
+            "Drug pricing regulation, patent cliff, or pipeline failure. "
+            "Defensive sector but acutely vulnerable to policy risk."
+        ),
+        use_copula=True,
+        use_regime_correlation=True,
+        beta_window="short"
+    ),
+    SectorStressScenario(
+        name="Telco Margin Compression",
+        shocked_sectors={"Telecommunication Services": -0.15},
+        description=(
+            "Spectrum auction cost spike, competitive tariff war, "
+            "or infrastructure capex overrun. High IDX relevance: TLKM."
+        ),
+        use_copula=True,
+        use_regime_correlation=True,
+        beta_window="short"
+    ),
+    SectorStressScenario(
+        name="Utility Rate Risk",
+        shocked_sectors={"Utilities": -0.20},
+        description=(
+            "Rate spike reprices utilities as bond proxies. "
+            "High IDX relevance: PGEO, PGAS, BREN. "
+            "Typically a natural hedge vs. financials."
+        ),
+        use_copula=True,
+        use_regime_correlation=True,
+        beta_window="short"
+    ),
+    SectorStressScenario(
+        name="FMCG Margin Squeeze",
+        shocked_sectors={"Consumer Non-Cyclicals": -0.15},
+        description=(
+            "Input cost inflation erodes FMCG margins. "
+            "IDX-specific driver: CPO price surge hits food manufacturers. "
+            "Counter-intuitively negative for 'defensive' Indonesian consumer names."
+        ),
+        use_copula=True,
+        use_regime_correlation=True,
+        beta_window="short"
+    ),
+    SectorStressScenario(
+        name="IDX Commodity + Currency Double Shock",
+        shocked_sectors={
+            "Energy": -0.20,
+            "Basic Materials": -0.20,
+            "Financials": -0.10,
+            "Consumer Cyclicals": -0.08,
+        },
+        description=(
+            "Rupiah weakens sharply while commodity prices fall — "
+            "the worst-case IDX macro scenario. Coal, nickel, CPO all drop "
+            "simultaneously as EM capital outflows pressure the currency. "
+            "Consumer Cyclicals dragged down by weakening domestic purchasing power."
+        ),
+        use_copula=True,
+        use_regime_correlation=True,
+        beta_window="long"
     ),
 ]
 
@@ -487,7 +554,8 @@ class SectorStressEngine:
             )
 
         # ── Beta-implied sector returns ───────────────────────────────────────
-        implied_sector_returns = self._compute_beta_implied(matched_shocks)
+        _effective_beta_window = scenario.beta_window or self._config.beta_window
+        implied_sector_returns = self._compute_beta_implied(matched_shocks, _effective_beta_window)
 
         # ── Unstable pair lookup (for per-holding stability flag) ─────────────
         unstable_pairs: set[frozenset] = set()
@@ -726,7 +794,7 @@ class SectorStressEngine:
         4. Identity matrix (fallback).
         """
         if scenario.use_dcc and self._dcc_result is not None:
-            if scenario.use_regime and self._regime_result is not None:
+            if (scenario.use_regime or scenario.use_regime_correlation) and self._regime_result is not None:
                 try:
                     return self._regime_detector.get_current_regime_correlation(
                         self._dcc_result, self._regime_result
@@ -766,13 +834,14 @@ class SectorStressEngine:
     def _compute_beta_implied(
         self,
         matched_shocks: dict[str, float],
+        beta_window: Optional[str] = None,
     ) -> pd.Series:
         """
         Propagate sector shocks via beta matrix.
 
         Uses ``SectorBetaAnalyzer.get_implied_returns`` with the window
-        specified by ``config.beta_window``.  Returns an empty Series if
-        beta_result is unavailable.
+        specified by ``beta_window`` (falls back to ``config.beta_window``).
+        Returns an empty Series if beta_result is unavailable.
         """
         if self._beta_result is None:
             return pd.Series(dtype=float)
@@ -780,10 +849,11 @@ class SectorStressEngine:
         if not matched_shocks:
             return pd.Series(0.0, index=self._beta_result.sectors)
 
+        use_window = beta_window if beta_window else self._config.beta_window
         return self._beta_analyzer.get_implied_returns(
             self._beta_result,
             shocked_sectors=matched_shocks,
-            use_window=self._config.beta_window,
+            use_window=use_window,
         )
 
     def _run_copula_simulation(
@@ -940,10 +1010,12 @@ if __name__ == "__main__":
     print(f"  get_hedge_candidates(): {len(hedges)} rows ✓")
 
     # ── DEFAULT_SCENARIOS sanity check ────────────────────────────────────────
-    assert len(DEFAULT_SCENARIOS) == 7, f"Expected 7 default scenarios, got {len(DEFAULT_SCENARIOS)}"
+    assert len(DEFAULT_SCENARIOS) == 12, f"Expected 12 default scenarios, got {len(DEFAULT_SCENARIOS)}"
     names = [s.name for s in DEFAULT_SCENARIOS]
     assert "Tech Selloff" in names
     assert "Full Market Crash" in names
+    assert "Healthcare Policy Shock" in names
+    assert "IDX Commodity + Currency Double Shock" in names
     print(f"  DEFAULT_SCENARIOS: {names} ✓")
 
     # ── Commodity Boom (positive shock, upper tail) ────────────────────────────

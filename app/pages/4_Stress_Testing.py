@@ -841,122 +841,185 @@ st.subheader("Hedging Effectiveness During Stress Events")
 
 if st.button("Analyse Hedging Effectiveness", key="hedge_stress_btn"):
     with st.spinner("Analysing stress-period hedging..."):
-        # Portfolio return series aligned with returns index
         _port_ret_stress = pd.Series(returns.values @ weights, index=returns.index)
 
-        # Full-period betas to classify assets as equity-like vs hedge
-        _pv_stress = float(_port_ret_stress.var())
-        if _pv_stress > 0:
-            _betas_st = {col: float(np.cov(returns[col].values,
-                                            _port_ret_stress.values)[0, 1] / _pv_stress)
-                         for col in returns.columns}
-        else:
-            _betas_st = {col: 1.0 for col in returns.columns}
+        data_start = returns.index.min()
+        data_end   = returns.index.max()
 
-        _beta_threshold_st = 0.5
-        _equity_assets = [c for c, b in _betas_st.items() if b >= _beta_threshold_st]
-        _hedge_assets = [c for c, b in _betas_st.items() if b < _beta_threshold_st]
+        stress_betas: dict     = {}   # scenario_name → {ticker: beta}
+        nonoverlap_names: list = []
+        _scenario_data: list   = []
 
-        col_info1, col_info2 = st.columns(2)
-        col_info1.markdown(f"**Equity-like (β ≥ {_beta_threshold_st}):** "
-                           f"{', '.join(_equity_assets) if _equity_assets else 'None'}")
-        col_info2.markdown(f"**Hedge / Diversifier (β < {_beta_threshold_st}):** "
-                           f"{', '.join(_hedge_assets) if _hedge_assets else 'None'}")
-
-        # Gather per-scenario data
-        _scenario_data = []
         for _sk, _sv in HISTORICAL_SCENARIOS.items():
             try:
-                _start = pd.Timestamp(_sv["start_date"])
-                _end = pd.Timestamp(_sv["end_date"])
-                _window = returns.loc[_start:_end]
-                if _window.empty:
-                    continue
-                _cum = (_window + 1).prod() - 1
-                _port_cum = float((_port_ret_stress.loc[_start:_end] + 1).prod() - 1)
-
-                # Identify best hedge (highest return = best offset of portfolio loss)
-                _best_hedge = None
-                _best_ret = float("-inf")
-                for _hc in _hedge_assets:
-                    if _hc in _cum.index and float(_cum[_hc]) > _best_ret:
-                        _best_ret = float(_cum[_hc])
-                        _best_hedge = _hc
-
-                _scenario_data.append({
-                    "key": _sk, "name": _sv["name"],
-                    "cum": _cum, "port_cum": _port_cum,
-                    "best_hedge": _best_hedge,
-                })
+                scen_start = pd.Timestamp(_sv["start_date"])
+                scen_end   = pd.Timestamp(_sv["end_date"])
             except Exception:
+                nonoverlap_names.append(_sv.get("name", _sk))
                 continue
 
-        if not _scenario_data:
-            st.warning("No historical scenario windows overlap with your return data.")
+            # Scenarios overlap if start < data_end AND end > data_start
+            overlaps = (scen_start <= data_end) and (scen_end >= data_start)
+            if not overlaps:
+                nonoverlap_names.append(_sv["name"])
+                continue
+
+            # Clip to actual data range
+            window_start = max(scen_start, data_start)
+            window_end   = min(scen_end,   data_end)
+            _window = returns.loc[window_start:window_end]
+
+            if len(_window) < 5:
+                nonoverlap_names.append(_sv["name"])
+                continue
+
+            # Compute stress-period betas for this scenario
+            _port_window = _port_ret_stress.loc[window_start:window_end]
+            _wpv = float(_port_window.var())
+            if _wpv > 0:
+                stress_betas[_sv["name"]] = {
+                    col: float(np.cov(_window[col].values, _port_window.values)[0, 1] / _wpv)
+                    for col in returns.columns
+                }
+
+            _cum = (_window + 1).prod() - 1
+            _port_cum = float(
+                (_port_ret_stress.loc[window_start:window_end] + 1).prod() - 1
+            )
+            _scenario_data.append({
+                "key": _sk, "name": _sv["name"],
+                "cum": _cum, "port_cum": _port_cum,
+                "best_hedge": None,  # filled in after classification below
+            })
+
+        # Determine which betas to use for classification
+        if stress_betas:
+            _first_scenario = next(iter(stress_betas))
+            _betas_to_use = stress_betas[_first_scenario]
+            beta_source_label = "stress-period"
         else:
-            for _sd in _scenario_data:
-                st.markdown(f"### {_sd['name']}")
-                col_left, col_right = st.columns(2)
-
-                with col_left:
-                    _cum_s = _sd["cum"]
-                    _bar_colors = ["crimson" if float(_cum_s[c]) < 0 else "steelblue"
-                                   for c in _cum_s.index]
-                    _fig_bar = go.Figure(go.Bar(
-                        x=list(_cum_s.index),
-                        y=(_cum_s * 100).round(2).tolist(),
-                        marker_color=_bar_colors, name="Asset Return"
-                    ))
-                    if _sd["best_hedge"] and _sd["best_hedge"] in _cum_s.index:
-                        _bh = _sd["best_hedge"]
-                        _fig_bar.add_annotation(
-                            x=_bh, y=float(_cum_s[_bh]) * 100,
-                            text=" Best Hedge", showarrow=True, arrowhead=2,
-                            font=dict(color="gold", size=13)
-                        )
-                    _fig_bar.update_layout(
-                        title=f"Asset Returns — {_sd['name']}",
-                        xaxis_title="Asset", yaxis_title="Cumulative Return (%)"
+            _pv_stress = float(_port_ret_stress.var())
+            if _pv_stress > 0:
+                _betas_to_use = {
+                    col: float(
+                        np.cov(returns[col].values, _port_ret_stress.values)[0, 1] / _pv_stress
                     )
-                    st.plotly_chart(_fig_bar, use_container_width=True)
+                    for col in returns.columns
+                }
+            else:
+                _betas_to_use = {col: 1.0 for col in returns.columns}
+            beta_source_label = "full-period"
 
-                with col_right:
-                    _eff_scores = {}
-                    _ticker_list = list(returns.columns)
-                    if _sd["port_cum"] < 0:
-                        for _hc in _hedge_assets:
-                            if _hc in _cum_s.index:
-                                _hc_ret = float(_cum_s[_hc])
-                                _hc_idx = _ticker_list.index(_hc)
-                                _hc_wt = float(weights[_hc_idx])
-                                # positive _hc_ret means the hedge gained → offset loss
-                                # negative _hc_ret means the hedge also lost → made it worse
-                                _offset = _hc_ret * _hc_wt
-                                _eff_scores[_hc] = round(
-                                    _offset / abs(_sd["port_cum"]) * 100, 2
-                                )
+        # One st.info message explaining source — not a warning, not an error
+        if nonoverlap_names:
+            n_missing = len(nonoverlap_names)
+            n_total   = len(HISTORICAL_SCENARIOS)
+            st.info(
+                f"**Stress-period beta:** {n_total - n_missing} of {n_total} historical "
+                f"scenarios fall within your data window "
+                f"({data_start.date()} → {data_end.date()}). "
+                f"Betas shown are computed over your **{beta_source_label}** return history. "
+                f"Extend your data range to 2005+ to enable crisis-period beta analysis."
+            )
 
-                    if _eff_scores:
-                        _eff_series = pd.Series(_eff_scores,
-                                                name="Hedge Effectiveness (% offset)")
-                        _fig_eff = px.bar(
-                            _eff_series.reset_index(),
-                            x="index", y="Hedge Effectiveness (% offset)",
-                            color="Hedge Effectiveness (% offset)",
-                            color_continuous_scale="Greens",
-                            title="Hedge Effectiveness Score"
-                        )
-                        _fig_eff.update_layout(xaxis_title="Hedge Asset")
-                        st.plotly_chart(_fig_eff, use_container_width=True)
+        st.subheader(
+            f"Hedging Effectiveness — Beta Classification "
+            f"({'Stress-Period' if beta_source_label == 'stress-period' else 'Full-Period, No Crisis Data'})"
+        )
 
-                        _avg_eff = float(np.mean(list(_eff_scores.values())))
-                        _verdict = ("Strong" if _avg_eff > 30 else
-                                    "Moderate" if _avg_eff > 10 else "Weak")
-                        st.metric("Avg Hedge Effectiveness",
-                                  f"{_avg_eff:.1f}%", delta=_verdict)
-                    elif _sd["port_cum"] >= 0:
-                        st.info("Portfolio was profitable during this period — no hedging needed.")
-                    else:
-                        st.info("No hedge assets identified for this scenario.")
+        _beta_threshold_st = 0.5
+        _equity_assets = [c for c, b in _betas_to_use.items() if b >= _beta_threshold_st]
+        _hedge_assets  = [c for c, b in _betas_to_use.items() if b < _beta_threshold_st]
 
-                st.markdown("---")
+        col_info1, col_info2 = st.columns(2)
+        col_info1.markdown(
+            f"**Equity-like (β to portfolio ≥ {_beta_threshold_st}):** "
+            f"{', '.join(_equity_assets) if _equity_assets else 'None'}"
+        )
+        col_info2.markdown(
+            f"**Hedge / Diversifier (β to portfolio < {_beta_threshold_st}):** "
+            f"{', '.join(_hedge_assets) if _hedge_assets else 'None'}"
+        )
+
+        st.caption(
+            f"Beta computed vs. portfolio returns ({beta_source_label}). "
+            f"β = 1.0 means the asset moves in line with the portfolio. "
+            f"β < 0 would indicate a true hedge (rare in equity-only portfolios)."
+        )
+
+        # Per-scenario analysis — only shown for scenarios that overlap the data window
+        for _sd in _scenario_data:
+            _cum_s = _sd["cum"]
+
+            # Resolve best_hedge now that _hedge_assets is known
+            _best_hedge = None
+            _best_ret = float("-inf")
+            for _hc in _hedge_assets:
+                if _hc in _cum_s.index and float(_cum_s[_hc]) > _best_ret:
+                    _best_ret = float(_cum_s[_hc])
+                    _best_hedge = _hc
+            _sd["best_hedge"] = _best_hedge
+
+            st.markdown(f"### {_sd['name']}")
+            col_left, col_right = st.columns(2)
+
+            with col_left:
+                _bar_colors = ["crimson" if float(_cum_s[c]) < 0 else "steelblue"
+                               for c in _cum_s.index]
+                _fig_bar = go.Figure(go.Bar(
+                    x=list(_cum_s.index),
+                    y=(_cum_s * 100).round(2).tolist(),
+                    marker_color=_bar_colors, name="Asset Return"
+                ))
+                if _sd["best_hedge"] and _sd["best_hedge"] in _cum_s.index:
+                    _bh = _sd["best_hedge"]
+                    _fig_bar.add_annotation(
+                        x=_bh, y=float(_cum_s[_bh]) * 100,
+                        text=" Best Hedge", showarrow=True, arrowhead=2,
+                        font=dict(color="gold", size=13)
+                    )
+                _fig_bar.update_layout(
+                    title=f"Asset Returns — {_sd['name']}",
+                    xaxis_title="Asset", yaxis_title="Cumulative Return (%)"
+                )
+                st.plotly_chart(_fig_bar, use_container_width=True)
+
+            with col_right:
+                _eff_scores = {}
+                _ticker_list = list(returns.columns)
+                if _sd["port_cum"] < 0:
+                    for _hc in _hedge_assets:
+                        if _hc in _cum_s.index:
+                            _hc_ret = float(_cum_s[_hc])
+                            _hc_idx = _ticker_list.index(_hc)
+                            _hc_wt = float(weights[_hc_idx])
+                            # positive _hc_ret offsets portfolio loss; negative worsens it
+                            _offset = _hc_ret * _hc_wt
+                            _eff_scores[_hc] = round(
+                                _offset / abs(_sd["port_cum"]) * 100, 2
+                            )
+
+                if _eff_scores:
+                    _eff_series = pd.Series(_eff_scores,
+                                            name="Hedge Effectiveness (% offset)")
+                    _fig_eff = px.bar(
+                        _eff_series.reset_index(),
+                        x="index", y="Hedge Effectiveness (% offset)",
+                        color="Hedge Effectiveness (% offset)",
+                        color_continuous_scale="Greens",
+                        title="Hedge Effectiveness Score"
+                    )
+                    _fig_eff.update_layout(xaxis_title="Hedge Asset")
+                    st.plotly_chart(_fig_eff, use_container_width=True)
+
+                    _avg_eff = float(np.mean(list(_eff_scores.values())))
+                    _verdict = ("Strong" if _avg_eff > 30 else
+                                "Moderate" if _avg_eff > 10 else "Weak")
+                    st.metric("Avg Hedge Effectiveness",
+                              f"{_avg_eff:.1f}%", delta=_verdict)
+                elif _sd["port_cum"] >= 0:
+                    st.info("Portfolio was profitable during this period — no hedging needed.")
+                else:
+                    st.info("No hedge assets identified for this scenario.")
+
+            st.markdown("---")

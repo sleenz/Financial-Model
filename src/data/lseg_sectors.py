@@ -26,6 +26,75 @@ if not _LSEG_AVAILABLE:
     )
 
 
+# Bidirectional sector label normalization maps.
+# Source of truth: TRBC labels (what LSEG natively returns).
+# yfinance fallback returns GICS labels — normalize all to TRBC on ingest.
+
+GICS_TO_TRBC: dict[str, str] = {
+    "Consumer Discretionary":  "Consumer Cyclicals",
+    "Consumer Staples":        "Consumer Non-Cyclicals",
+    "Information Technology":  "Technology",
+    "Communication Services":  "Telecommunication Services",
+    # These are identical in both systems — listed for completeness:
+    "Energy":                  "Energy",
+    "Financials":              "Financials",
+    "Healthcare":              "Healthcare",
+    "Industrials":             "Industrials",
+    "Materials":               "Basic Materials",
+    "Real Estate":             "Real Estate",
+    "Utilities":               "Utilities",
+}
+
+TRBC_TO_GICS: dict[str, str] = {v: k for k, v in GICS_TO_TRBC.items()}
+
+# IDX-specific sector overrides.
+# Applied AFTER normalization. Use RIC format (with .JK suffix).
+# Reason: TRBC assigns based on primary revenue, but some IDX names
+# have beta behavior that diverges from their assigned sector.
+IDX_SECTOR_OVERRIDES: dict[str, str] = {
+    "PGEO.JK":  "Utilities",           # Geothermal — regulated utility behavior
+    "GOTO.JK":  "Consumer Cyclicals",  # Super-app — consumer discretionary, not pure tech
+    "BREN.JK":  "Utilities",           # Renewable power — utility behavior
+    "PGAS.JK":  "Utilities",           # Gas distribution — utility
+    "TLKM.JK":  "Telecommunication Services",  # Confirm vs LSEG assignment
+    "EMTK.JK":  "Technology",          # Digital finance/tech
+}
+
+
+def normalize_sector_label(
+    sector: str,
+    source: str,
+    target_standard: str = "trbc"
+) -> str:
+    """
+    Normalize a sector label to a consistent standard.
+
+    Parameters
+    ----------
+    sector : str
+        Raw sector label from LSEG or yfinance.
+    source : str
+        "lseg" or "yfinance". Determines which map to apply.
+    target_standard : str
+        "trbc" (default) — normalize everything to TRBC labels.
+        "gics" — normalize everything to GICS labels.
+
+    Returns
+    -------
+    str
+        Normalized sector label. If not found in map, returns
+        original label unchanged (handles unknown sectors).
+    """
+    if target_standard == "trbc":
+        if source == "yfinance":
+            return GICS_TO_TRBC.get(sector, sector)
+        return sector   # LSEG already returns TRBC
+    else:
+        if source == "lseg":
+            return TRBC_TO_GICS.get(sector, sector)
+        return sector   # yfinance already returns GICS
+
+
 class LSEGConnectionError(RuntimeError):
     """Raised when LSEG Data Library is unavailable and fallback is disabled."""
 
@@ -162,6 +231,7 @@ class LSEGSectorFetcher:
             if not sector or sector.lower() in ("nan", "none", ""):
                 return None
 
+            sector = normalize_sector_label(sector, source="yfinance")
             industry = str(info.get("industry", "") or "").strip() or sector
 
             return SectorClassification(
@@ -264,6 +334,21 @@ class LSEGSectorFetcher:
                     industry=self._config.unknown_sector_label,
                     source="unknown",
                 )
+
+        # ── Step 3b: Apply IDX sector overrides ─────────────────────────
+        # Applied after all classification is complete.
+        for ticker, override_sector in IDX_SECTOR_OVERRIDES.items():
+            if ticker in classifications:
+                original = classifications[ticker].economic_sector
+                if original != override_sector:
+                    logger.info(
+                        f"IDX sector override applied: {ticker} "
+                        f"{original!r} → {override_sector!r}"
+                    )
+                    classifications[ticker].economic_sector = override_sector
+                    classifications[ticker].source = (
+                        classifications[ticker].source + "+override"
+                    )
 
         # ── Step 4: Cache and return ────────────────────────────────────
         self._cache.set(
