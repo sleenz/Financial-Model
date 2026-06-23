@@ -139,7 +139,7 @@ st.markdown("---")
 
 st.subheader("3. Run Analysis")
 
-_run = st.button("Run 3-Stage Valuation", type="primary", use_container_width=True)
+_run = st.button("Run 3-Stage Valuation", type="primary", width="stretch")
 
 if not _run:
     st.info(
@@ -213,7 +213,7 @@ with col_left:
 
     st.dataframe(
         _disp.style.apply(_style_rank, axis=None),
-        use_container_width=True,
+        width="stretch",
         height=min(400, 36 + 35 * len(_disp)),
     )
 
@@ -241,7 +241,7 @@ with col_right:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         height=350,
     )
-    st.plotly_chart(_fig1, use_container_width=True)
+    st.plotly_chart(_fig1, width="stretch")
 
 st.markdown("---")
 
@@ -340,7 +340,7 @@ _fig2.add_hline(y=65, line_dash="dot", line_color="blue",
 _fig2.add_hline(y=50, line_dash="dot", line_color="orange",
                 annotation_text="Hold (50)", annotation_position="top left")
 
-st.plotly_chart(_fig2, use_container_width=True)
+st.plotly_chart(_fig2, width="stretch")
 
 # Radar chart — show each ticker as a separate trace
 if len(_scores_df) > 0:
@@ -370,7 +370,7 @@ if len(_scores_df) > 0:
         title="Factor Profiles (normalised to max per factor)",
         height=450,
     )
-    st.plotly_chart(_fig_radar, use_container_width=True)
+    st.plotly_chart(_fig_radar, width="stretch")
 
 st.markdown("---")
 
@@ -532,7 +532,7 @@ _display = _display.rename(columns={
 
 st.dataframe(
     _display.style.apply(_colour_row, axis=1),
-    use_container_width=True,
+    width="stretch",
     height=min(600, 50 + 35 * len(_display)),
 )
 
@@ -608,7 +608,7 @@ if _dcf_map:
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             height=400,
         )
-        st.plotly_chart(_fig_dcf, use_container_width=True)
+        st.plotly_chart(_fig_dcf, width="stretch")
 
     # DCF table
     _dcf_display_rows = []
@@ -642,7 +642,7 @@ if _dcf_map:
 
     st.dataframe(
         _dcf_table.style.applymap(_style_verdict_col, subset=["Verdict"]),
-        use_container_width=True,
+        width="stretch",
     )
 
     st.markdown("---")
@@ -693,7 +693,7 @@ with st.expander("Score Breakdown per Sub-factor (detail)", expanded=False):
 
         st.dataframe(
             _bd_df.style.applymap(_highlight_none),
-            use_container_width=True,
+            width="stretch",
         )
         st.caption(
             "Gray/italic = data unavailable (score not counted). "

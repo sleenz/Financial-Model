@@ -181,7 +181,7 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
                 yaxis_title="Weight (%)",
                 xaxis_title="Asset"
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         with col2:
             st.markdown("**Required Changes**")
@@ -195,7 +195,7 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
             )
             changes_display['Shares to Trade'] = changes_display['Shares to Trade'].round(2)
 
-            st.dataframe(changes_display, use_container_width=True)
+            st.dataframe(changes_display, width="stretch")
 
         # Action summary
         st.markdown("**Trading Actions:**")
@@ -238,7 +238,7 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
             title="Portfolio Allocation"
         )
         fig.update_traces(textposition='inside', textinfo='percent+label')
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with col2:
         st.subheader("Weight Comparison")
@@ -255,7 +255,7 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
             xaxis_title="Asset",
             yaxis_title="Weight (%)"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     # Position sizing table
     st.subheader("Position Sizing")
@@ -279,7 +279,7 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
     display_df['Actual Amount'] = display_df['Actual Amount'].apply(lambda x: f"${x:,.2f}")
     display_df['Remainder'] = display_df['Remainder'].apply(lambda x: f"${x:,.2f}")
 
-    st.dataframe(display_df, use_container_width=True)
+    st.dataframe(display_df, width="stretch")
 
     # Summary
     col1, col2, col3 = st.columns(3)
@@ -343,7 +343,7 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
                     showlegend=True
                 )
 
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
     # Method comparison
     st.markdown("---")
@@ -363,7 +363,7 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
 
             display_comp.columns = ['Method', 'Return (%)', 'Volatility (%)', 'Sharpe', 'Max Weight (%)', 'Min Weight', 'Positions']
 
-            st.dataframe(display_comp, use_container_width=True)
+            st.dataframe(display_comp, width="stretch")
 
     # Export
     st.markdown("---")

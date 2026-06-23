@@ -82,7 +82,7 @@ with tab1:
     if use_actual_returns:
         # ── New path — actual per-stock returns ───────────────────────────────
         if st.button("Run All Historical Scenarios", type="primary", key="run_hist_actual"):
-            _tickers = list(returns.columns)
+            _tickers = [str(c) for c in returns.columns]
             _weights_series = pd.Series(
                 {t: float(w) for t, w in zip(_tickers, weights)}
             )
@@ -107,7 +107,7 @@ with tab1:
                     "Portfolio Return": "{:.1%}",
                     "Portfolio P&L": "${:,.0f}",
                 }).background_gradient(subset=["Portfolio Return"], cmap="RdYlGn"),
-                use_container_width=True,
+                width="stretch",
             )
 
             # Per-scenario drill-down
@@ -143,7 +143,7 @@ with tab1:
                             "Beta Used": "{:.2f}",
                             "P&L ($)": "${:,.0f}",
                         }),
-                    use_container_width=True,
+                    width="stretch",
                 )
 
                 _warnings = [
@@ -166,7 +166,7 @@ with tab1:
                 results = stress_tester.run_all_historical()
 
                 # Display results
-                st.dataframe(results.round(2), use_container_width=True)
+                st.dataframe(results.round(2), width="stretch")
 
                 # Chart
                 fig = go.Figure(data=[
@@ -182,7 +182,7 @@ with tab1:
                     yaxis_title="Return (%)",
                     xaxis_tickangle=-45
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
     # Individual scenario details (legacy reference — always shown)
     st.markdown("---")
@@ -262,7 +262,7 @@ with tab2:
                 xaxis_title="Portfolio Value ($)",
                 yaxis_title="Frequency"
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
             # Percentile table
             st.markdown("**Percentile Distribution**")
@@ -270,7 +270,7 @@ with tab2:
                 'Percentile': analysis['percentiles'].keys(),
                 'Value ($)': [f"${v:,.0f}" for v in analysis['percentiles'].values()]
             })
-            st.dataframe(pct_df.T, use_container_width=True)
+            st.dataframe(pct_df.T, width="stretch")
 
             # Sample paths
             st.markdown("**Sample Simulation Paths**")
@@ -298,7 +298,7 @@ with tab2:
                 xaxis_title="Day",
                 yaxis_title="Portfolio Value ($)"
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
 with tab3:
     st.subheader("Custom Stress Test")
@@ -350,9 +350,9 @@ with tab3:
             xaxis_title="Market Shock (%)",
             yaxis_title="Portfolio Value ($)"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
-        st.dataframe(sensitivity.round(2), use_container_width=True)
+        st.dataframe(sensitivity.round(2), width="stretch")
 
 with tab4:
     st.subheader("Sector Shock Stress Test")
@@ -527,7 +527,7 @@ with tab4:
                         title="Beta Matrix (1Y/3Y average)",
                     )
                     _fig_beta.update_layout(height=380)
-                    st.plotly_chart(_fig_beta, use_container_width=True)
+                    st.plotly_chart(_fig_beta, width="stretch")
                     _n_un = _engine._beta_result.n_unstable_pairs
                     if _n_un > 0:
                         st.warning(f"{_n_un} unstable sector pair(s) — beta estimates may drift.")
@@ -559,7 +559,7 @@ with tab4:
                         title="DCC Correlation",
                     )
                     _fig_corr.update_layout(height=380)
-                    st.plotly_chart(_fig_corr, use_container_width=True)
+                    st.plotly_chart(_fig_corr, width="stretch")
                 else:
                     st.info("DCC-GARCH model not fitted.")
 
@@ -682,7 +682,7 @@ with tab4:
                     showlegend=False,
                     margin=dict(t=30),
                 )
-                st.plotly_chart(_fig_wf, use_container_width=True)
+                st.plotly_chart(_fig_wf, width="stretch")
 
             # Holdings table
             st.markdown("#### Holdings Detail")
@@ -695,7 +695,7 @@ with tab4:
                     "pnl_contribution_beta": "${:,.0f}",
                     "pnl_contribution_copula": "${:,.0f}",
                 }),
-                use_container_width=True,
+                width="stretch",
                 height=340,
             )
 
@@ -709,7 +709,7 @@ with tab4:
                         _exposed.style.format(
                             {"weight": "{:.2%}", "pnl": "${:,.0f}"}
                         ),
-                        use_container_width=True,
+                        width="stretch",
                     )
                 else:
                     st.info("No holdings with negative P&L.")
@@ -723,7 +723,7 @@ with tab4:
                             "weight": "{:.2%}",
                             "pnl_contribution_beta": "${:,.0f}",
                         }),
-                        use_container_width=True,
+                        width="stretch",
                     )
                 else:
                     st.info("No holdings gain under this scenario.")
@@ -746,7 +746,7 @@ with tab4:
                             "beta_implied_return": "{:+.2%}",
                             "pnl_contribution_beta": "${:,.0f}",
                         }),
-                        use_container_width=True,
+                        width="stretch",
                     )
 
             # Copula correlation used
@@ -760,7 +760,7 @@ with tab4:
                         text_auto=".2f",
                     )
                     _fig_cu.update_layout(height=380)
-                    st.plotly_chart(_fig_cu, use_container_width=True)
+                    st.plotly_chart(_fig_cu, width="stretch")
 
             # Run notes
             if _res.warnings:
@@ -802,7 +802,7 @@ with tab4:
                     "Copula P&L ($)": "${:,.0f}",
                     "Copula P&L (%)": "{:+.2f}%",
                 }).background_gradient(subset=["Beta P&L ($)"], cmap="RdYlGn"),
-                use_container_width=True,
+                width="stretch",
             )
 
             # Grouped bar chart
@@ -832,7 +832,7 @@ with tab4:
                 height=430,
                 legend=dict(orientation="h", yanchor="bottom", y=1.02),
             )
-            st.plotly_chart(_fig_cmp, use_container_width=True)
+            st.plotly_chart(_fig_cmp, width="stretch")
 
 
 # ── Hedging Effectiveness During Stress Events ────────────────────────────────
@@ -982,7 +982,7 @@ if st.button("Analyse Hedging Effectiveness", key="hedge_stress_btn"):
                     title=f"Asset Returns — {_sd['name']}",
                     xaxis_title="Asset", yaxis_title="Cumulative Return (%)"
                 )
-                st.plotly_chart(_fig_bar, use_container_width=True)
+                st.plotly_chart(_fig_bar, width="stretch")
 
             with col_right:
                 _eff_scores = {}
@@ -1010,7 +1010,7 @@ if st.button("Analyse Hedging Effectiveness", key="hedge_stress_btn"):
                         title="Hedge Effectiveness Score"
                     )
                     _fig_eff.update_layout(xaxis_title="Hedge Asset")
-                    st.plotly_chart(_fig_eff, use_container_width=True)
+                    st.plotly_chart(_fig_eff, width="stretch")
 
                     _avg_eff = float(np.mean(list(_eff_scores.values())))
                     _verdict = ("Strong" if _avg_eff > 30 else
