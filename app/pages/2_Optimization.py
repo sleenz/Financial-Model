@@ -36,6 +36,7 @@ METHOD_MAP = {
     "Hierarchical Risk Parity (HRP)": "hrp",
     "Maximum Diversification": "max_diversification",
     "Equal Weight": "equal_weight",
+    "Custom / Current Holdings": "use_current",
 }
 
 # Run optimization
@@ -43,10 +44,14 @@ st.subheader("Optimization Settings")
 col1, col2, col3 = st.columns(3)
 
 with col1:
+    _method_options = list(METHOD_MAP.keys())
+    _default_method = settings.get('optimization_method', "Maximum Sharpe Ratio")
+    if _default_method not in _method_options:
+        _default_method = "Maximum Sharpe Ratio"
     method_name = st.selectbox(
         "Method",
-        list(METHOD_MAP.keys()),
-        index=list(METHOD_MAP.keys()).index(settings.get('optimization_method', "Maximum Sharpe Ratio"))
+        _method_options,
+        index=_method_options.index(_default_method)
     )
     method = METHOD_MAP[method_name]
 
@@ -64,18 +69,72 @@ with col3:
         format="%.3f"
     )
 
-# Run button
-if st.button("Run Optimization", type="primary"):
-    with st.spinner("Optimizing portfolio..."):
-        # Create constraints
-        constraints = PortfolioConstraints(
-            max_weight=settings.get('max_weight', 0.4),
-            min_position_size=settings.get('min_weight', 0.0),
+# Info banner for Custom / Current Holdings mode
+if method == "use_current":
+    _cw = st.session_state.get('current_portfolio_weights')
+    if _cw is not None:
+        _n_pos = int((_cw > 0).sum())
+        st.info(
+            f"**Custom / Current Holdings mode** — your existing allocation "
+            f"({_n_pos} position{'s' if _n_pos != 1 else ''}) will be used as-is. "
+            "No optimization will be run."
+        )
+    else:
+        st.warning(
+            "No current holdings found. "
+            "Go to **Portfolio Input → Option 1: My Current Holdings**, "
+            "add your positions, and click **Analyze My Portfolio** first."
         )
 
-        # Run optimizer
-        optimizer = PortfolioOptimizer(returns, rf_rate)
-        result = optimizer.optimize(method, constraints)
+# Run button
+_btn_label = "Analyze Portfolio" if method == "use_current" else "Run Optimization"
+if st.button(_btn_label, type="primary"):
+    with st.spinner("Analyzing portfolio..." if method == "use_current" else "Optimizing portfolio..."):
+
+        if method == "use_current":
+            _cw = st.session_state.get('current_portfolio_weights')
+            if _cw is None:
+                st.error("No current holdings found. Please enter holdings on the Portfolio Input page first.")
+                st.stop()
+
+            # Align with tickers that have return data; normalize
+            _available = list(returns.columns)
+            _missing = [t for t in _cw.index if t not in _available]
+            if _missing:
+                st.warning(f"No price data for: {', '.join(_missing)}. Their weight will be redistributed.")
+            _wa = _cw.reindex(_available, fill_value=0.0)
+            _total = _wa.sum()
+            if _total <= 0:
+                st.error("Could not match any holdings to the loaded tickers. Check spelling.")
+                st.stop()
+            _wa = _wa / _total
+
+            _weights_arr = _wa.values
+            _mean_ret = returns.mean() * 252
+            _cov_mat = returns.cov() * 252
+            _exp_ret = float(np.dot(_weights_arr, _mean_ret.values))
+            _vol = float(np.sqrt(_weights_arr @ _cov_mat.values @ _weights_arr))
+            _sharpe = (_exp_ret - rf_rate) / _vol if _vol > 0 else 0.0
+
+            result = {
+                'weights': _wa,
+                'expected_return': _exp_ret,
+                'volatility': _vol,
+                'sharpe_ratio': _sharpe,
+                'method': 'use_current',
+            }
+            optimizer = None
+
+        else:
+            # Create constraints
+            constraints = PortfolioConstraints(
+                max_weight=settings.get('max_weight', 0.4),
+                min_position_size=settings.get('min_weight', 0.0),
+            )
+
+            # Run optimizer
+            optimizer = PortfolioOptimizer(returns, rf_rate)
+            result = optimizer.optimize(method, constraints)
 
         # Store result and data for other pages
         st.session_state.optimization_result = result
@@ -92,7 +151,7 @@ if st.button("Run Optimization", type="primary"):
             'sharpe_ratio': result['sharpe_ratio']
         }
 
-        st.success("Optimization complete!")
+        st.success("Analysis complete!" if method == "use_current" else "Optimization complete!")
 
 # Display results if available
 if 'optimization_result' in st.session_state and st.session_state.optimization_result is not None:
@@ -116,8 +175,8 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
 
     st.markdown("---")
 
-    # Rebalancing Section (if user has current holdings)
-    if st.session_state.get('current_portfolio_weights') is not None:
+    # Rebalancing Section (if user has current holdings AND optimization was actually run)
+    if result.get('method') != 'use_current' and st.session_state.get('current_portfolio_weights') is not None:
         st.subheader(" Rebalancing Recommendations")
 
         current_weights = st.session_state.current_portfolio_weights
@@ -272,8 +331,19 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
     positions = calc.calculate_positions()
     summary = calc.get_summary()
 
+    # Filter out zero-weight positions (excluded by min position size or not held)
+    active_positions = positions[positions['Weight'] > 1e-4]
+    n_excluded = len(positions) - len(active_positions)
+    if n_excluded > 0:
+        _min_pct = settings.get('min_weight', 0) * 100
+        if _min_pct > 0:
+            st.info(
+                f"{n_excluded} position{'s' if n_excluded != 1 else ''} excluded: "
+                f"weight fell below the {_min_pct:.0f}% minimum position size threshold."
+            )
+
     # Format for display
-    display_df = positions[['Weight', 'Price', 'Shares', 'Actual Amount', 'Remainder']].copy()
+    display_df = active_positions[['Weight', 'Price', 'Shares', 'Actual Amount', 'Remainder']].copy()
     display_df['Weight'] = (display_df['Weight'] * 100).round(2).astype(str) + '%'
     display_df['Price'] = display_df['Price'].apply(lambda x: f"${x:,.2f}")
     display_df['Actual Amount'] = display_df['Actual Amount'].apply(lambda x: f"${x:,.2f}")
@@ -290,11 +360,13 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
     with col3:
         st.metric("Unallocated %", f"{summary['unallocated_pct']*100:.2f}%")
 
-    # Efficient Frontier
+    # Efficient Frontier (only when an optimizer was run, not for custom holdings)
     st.markdown("---")
     st.subheader("Efficient Frontier")
 
-    if st.button("Calculate Efficient Frontier"):
+    if result.get('method') == 'use_current':
+        st.info("Efficient frontier is not available in Custom / Current Holdings mode.")
+    elif st.button("Calculate Efficient Frontier"):
         with st.spinner("Calculating frontier..."):
             optimizer = st.session_state.optimizer
             frontier = optimizer.efficient_frontier(n_points=30)
@@ -345,11 +417,13 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
 
                 st.plotly_chart(fig, width="stretch")
 
-    # Method comparison
+    # Method comparison (only when an optimizer is available)
     st.markdown("---")
     st.subheader("Method Comparison")
 
-    if st.button("Compare All Methods"):
+    if result.get('method') == 'use_current':
+        st.info("Method comparison is not available in Custom / Current Holdings mode.")
+    elif st.button("Compare All Methods"):
         with st.spinner("Comparing methods..."):
             optimizer = st.session_state.optimizer
             comparison = optimizer.compare_methods()
