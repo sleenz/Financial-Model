@@ -328,31 +328,34 @@ class HistoricalStressor:
         results: dict[str, StockScenarioReturn] = {}
 
         for ticker in tickers:
-            prices = self._download(ticker, scenario.start_date, scenario.end_date)
+            # Coerce to str — guards against MultiIndex tuple column names
+            # propagating from returns.columns into the ticker identifier.
+            ticker_str = str(ticker) if not isinstance(ticker, str) else ticker
+            prices = self._download(ticker_str, scenario.start_date, scenario.end_date)
 
             if len(prices) >= cfg.min_data_points:
-                ret = self._cumulative_return(prices, ticker)
+                ret = self._cumulative_return(prices, ticker_str)
                 if ret is not None:
-                    results[ticker] = StockScenarioReturn(
-                        ticker=ticker,
+                    results[ticker_str] = StockScenarioReturn(
+                        ticker=ticker_str,
                         realized_return=ret,
                         source="actual",
                         beta_used=1.0,
                         data_points=len(prices),
                         warning="",
                     )
-                    logger.debug(f"  {ticker}: actual {ret:.2%} ({len(prices)} days)")
+                    logger.debug(f"  {ticker_str}: actual {ret:.2%} ({len(prices)} days)")
                     continue
 
             # Insufficient crisis data — use beta scaling
             logger.debug(
-                f"  {ticker}: only {len(prices)} crisis days — using beta-scaled fallback"
+                f"  {ticker_str}: only {len(prices)} crisis days — using beta-scaled fallback"
             )
-            beta, warn = self._estimate_beta(ticker, scenario, index_crisis_return)
+            beta, warn = self._estimate_beta(ticker_str, scenario, index_crisis_return)
             realized = beta * index_crisis_return
 
-            results[ticker] = StockScenarioReturn(
-                ticker=ticker,
+            results[ticker_str] = StockScenarioReturn(
+                ticker=ticker_str,
                 realized_return=realized,
                 source="beta_scaled",
                 beta_used=beta,
@@ -448,8 +451,8 @@ class HistoricalStressor:
         sorted_by_ret = sorted(
             stock_returns.values(), key=lambda r: r.realized_return
         )
-        worst_stock = sorted_by_ret[0].ticker if sorted_by_ret else ""
-        best_stock = sorted_by_ret[-1].ticker if sorted_by_ret else ""
+        worst_stock = str(sorted_by_ret[0].ticker) if sorted_by_ret else ""
+        best_stock = str(sorted_by_ret[-1].ticker) if sorted_by_ret else ""
 
         n_actual = sum(1 for r in stock_returns.values() if r.source == "actual")
         n_beta_scaled = len(stock_returns) - n_actual
@@ -544,6 +547,12 @@ class HistoricalStressor:
             ])
         df = pd.DataFrame(rows)
         df = df.sort_values("Portfolio Return", ascending=True).reset_index(drop=True)
+        # Ensure Arrow-serialisable types: ticker fields may arrive as tuples when
+        # the caller's returns.columns is a MultiIndex.
+        for _col in ("Worst Stock", "Best Stock"):
+            df[_col] = df[_col].apply(
+                lambda v: str(v[0]) if isinstance(v, (tuple, list)) and len(v) else str(v)
+            )
         return df
 
     def to_stock_breakdown(

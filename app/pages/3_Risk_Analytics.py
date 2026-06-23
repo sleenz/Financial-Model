@@ -97,7 +97,7 @@ with tab1:
         st.markdown("**VaR by Method (Daily)**")
         var_display = var_results.copy() * 100
         var_display = var_display.round(3)
-        st.dataframe(var_display, use_container_width=True)
+        st.dataframe(var_display, width="stretch")
 
     with col2:
         # VaR distribution
@@ -120,7 +120,7 @@ with tab1:
             yaxis_title="Frequency",
             showlegend=False
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 with tab2:
     st.subheader("Drawdown Analysis")
@@ -146,7 +146,7 @@ with tab2:
             xaxis_title="Date",
             yaxis_title="Drawdown (%)"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with col2:
         # Drawdown metrics table
@@ -158,13 +158,13 @@ with tab2:
             'Ulcer Index': rm.ulcer_index(prices) * 100,
         }).round(2)
 
-        st.dataframe(dd_metrics, use_container_width=True)
+        st.dataframe(dd_metrics, width="stretch")
 
         # Calmar ratio
         calmar = rm.calmar_ratio(prices)
         st.markdown("**Calmar Ratio (Return/MDD)**")
         calmar_df = pd.DataFrame({'Calmar': calmar}).round(3)
-        st.dataframe(calmar_df, use_container_width=True)
+        st.dataframe(calmar_df, width="stretch")
 
 with tab3:
     st.subheader("Correlation Analysis")
@@ -182,7 +182,7 @@ with tab3:
             color_continuous_scale='RdBu_r',
             title="Correlation Matrix"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with col2:
         # Correlation stats
@@ -202,7 +202,7 @@ with tab3:
                 })
 
         pairs_df = pd.DataFrame(corr_pairs).sort_values('Correlation', ascending=False)
-        st.dataframe(pairs_df.head(5), use_container_width=True)
+        st.dataframe(pairs_df.head(5), width="stretch")
 
 with tab4:
     st.subheader("Volatility Analysis")
@@ -229,7 +229,7 @@ with tab4:
             xaxis_title="Date",
             yaxis_title="Annualized Volatility (%)"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with col2:
         # EWMA volatility
@@ -250,7 +250,7 @@ with tab4:
             xaxis_title="Date",
             yaxis_title="Volatility (%)"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
 # ── Module 2 & 3: Deep Risk Analysis + Hedging Effectiveness ──────────────────
 try:
@@ -327,7 +327,7 @@ with _tab_var2:
 
     col1, col2 = st.columns(2)
     with col1:
-        st.dataframe(_var_df, use_container_width=True)
+        st.dataframe(_var_df, width="stretch")
         if _HAS_SCIPY and "Normal VaR (%)" in _var_df.columns:
             _divergence = abs(_var_rows["95%"]["Historical VaR (%)"]
                               - _var_rows["95%"]["Normal VaR (%)"])
@@ -343,7 +343,7 @@ with _tab_var2:
                                     name="CVaR", marker_color="crimson"))
         _fig_var2.update_layout(barmode="group",
                                  xaxis_title="Confidence Level", yaxis_title="Return (%)")
-        st.plotly_chart(_fig_var2, use_container_width=True)
+        st.plotly_chart(_fig_var2, width="stretch")
 
     st.markdown("#### Portfolio Return Distribution with VaR Overlay")
     _fig_dist = go.Figure()
@@ -354,7 +354,7 @@ with _tab_var2:
     _fig_dist.add_vline(x=_var_rows["99%"]["Historical VaR (%)"], line_dash="dash",
                          line_color="red", annotation_text="VaR 99%")
     _fig_dist.update_layout(xaxis_title="Return (%)", yaxis_title="Frequency")
-    st.plotly_chart(_fig_dist, use_container_width=True)
+    st.plotly_chart(_fig_dist, width="stretch")
 
 with _tab_tail:
     st.markdown("#### Tail Risk Metrics")
@@ -391,7 +391,7 @@ with _tab_tail:
     _fig_srt = px.bar(pd.DataFrame(_sortino_vals), x="Ticker", y="Sortino",
                        color="Sortino", color_continuous_scale="RdYlGn")
     _fig_srt.update_layout(xaxis_title="Asset", yaxis_title="Sortino Ratio")
-    st.plotly_chart(_fig_srt, use_container_width=True)
+    st.plotly_chart(_fig_srt, width="stretch")
 
     if _HAS_SCIPY:
         st.markdown("#### QQ Plot (Portfolio Returns vs Normal)")
@@ -406,7 +406,7 @@ with _tab_tail:
                                       line=dict(color="red"), name="Normal"))
         _fig_qq.update_layout(xaxis_title="Theoretical Quantiles",
                                yaxis_title="Sample Quantiles")
-        st.plotly_chart(_fig_qq, use_container_width=True)
+        st.plotly_chart(_fig_qq, width="stretch")
 
     st.markdown("#### Tail Event Summary")
     _tail_rows = []
@@ -417,7 +417,7 @@ with _tab_tail:
                             "Threshold (%)": round(_cut * 100, 3),
                             "Avg Loss (%)": round(_tevents.mean() * 100, 3),
                             "# Days": len(_tevents)})
-    st.dataframe(pd.DataFrame(_tail_rows), use_container_width=True)
+    st.dataframe(pd.DataFrame(_tail_rows), width="stretch")
 
 with _tab_mc:
     st.markdown("#### Monte Carlo Risk Simulation")
@@ -436,7 +436,7 @@ with _tab_mc:
     with col1:
         st.markdown("**Simulated VaR & CVaR**")
         _mc_tbl = pd.DataFrame({"MC VaR (%)": _var_mc, "MC CVaR (%)": _cvar_mc})
-        st.dataframe(_mc_tbl, use_container_width=True)
+        st.dataframe(_mc_tbl, width="stretch")
     with col2:
         _fig_mc_hist = go.Figure()
         _fig_mc_hist.add_trace(go.Histogram(x=_mc_rets * 100, nbinsx=60,
@@ -446,7 +446,7 @@ with _tab_mc:
         _fig_mc_hist.add_vline(x=_var_mc["99%"], line_dash="dash", line_color="red",
                                 annotation_text="VaR 99%")
         _fig_mc_hist.update_layout(xaxis_title="Simulated Return (%)", yaxis_title="Frequency")
-        st.plotly_chart(_fig_mc_hist, use_container_width=True)
+        st.plotly_chart(_fig_mc_hist, width="stretch")
 
     st.markdown("#### Simulated Portfolio Paths (100 days)")
     _pv0 = st.session_state.get("portfolio_value", 10000)
@@ -466,7 +466,7 @@ with _tab_mc:
         _fig_paths.add_trace(go.Scatter(y=_pct_line, name=_pct_label,
                                          line=dict(color=_color, width=_lw)))
     _fig_paths.update_layout(xaxis_title="Day", yaxis_title="Portfolio Value ($)")
-    st.plotly_chart(_fig_paths, use_container_width=True)
+    st.plotly_chart(_fig_paths, width="stretch")
 
 
 # ── Module 3: Hedging Effectiveness ──────────────────────────────────────────
@@ -495,10 +495,10 @@ with _tab_h1:
                                   name="Risk Contribution", marker_color="crimson"))
         _fig_rc.update_layout(barmode="group", xaxis_title="Asset", yaxis_title="(%)",
                                title="Weight vs Risk Contribution")
-        st.plotly_chart(_fig_rc, use_container_width=True)
+        st.plotly_chart(_fig_rc, width="stretch")
 
     with col2:
-        st.dataframe(_rc_df, use_container_width=True)
+        st.dataframe(_rc_df, width="stretch")
         st.metric("Diversification Ratio", f"{_DR:.3f}",
                   help="Weighted-avg vol / portfolio vol. >1 means diversification benefit.")
         _hhi_rc = float(np.sum(_RC_pct ** 2))
@@ -510,7 +510,7 @@ with _tab_h1:
     _fig_pie = px.pie(values=np.abs(_RC_pct), names=returns.columns,
                        title="Risk Contribution Share")
     _fig_pie.update_traces(textposition="inside", textinfo="percent+label")
-    st.plotly_chart(_fig_pie, use_container_width=True)
+    st.plotly_chart(_fig_pie, width="stretch")
 
 with _tab_h2:
     st.markdown("#### Hedge Classification by Portfolio Beta")
@@ -526,7 +526,7 @@ with _tab_h2:
 
     col1, col2 = st.columns(2)
     with col1:
-        st.dataframe(_hedge_df, use_container_width=True)
+        st.dataframe(_hedge_df, width="stretch")
     with col2:
         _color_map = {"Equity": "steelblue", "Hedge / Diversifier": "seagreen"}
         _hedge_plot = _hedge_df.reset_index().rename(columns={_hedge_df.index.name or "index": "Asset"})
@@ -534,7 +534,7 @@ with _tab_h2:
                             color="Role", color_discrete_map=_color_map,
                             title="Asset Beta to Portfolio")
         _fig_beta.update_layout(xaxis_title="Asset")
-        st.plotly_chart(_fig_beta, use_container_width=True)
+        st.plotly_chart(_fig_beta, width="stretch")
 
     st.markdown("#### Component VaR (95%, Normal)")
     _z95 = 1.645
@@ -549,8 +549,8 @@ with _tab_h2:
                          color_continuous_scale="Reds",
                          title="Component VaR by Asset")
     _fig_cvar2.update_layout(xaxis_title="Asset")
-    st.plotly_chart(_fig_cvar2, use_container_width=True)
-    st.dataframe(_comp_var_df, use_container_width=True)
+    st.plotly_chart(_fig_cvar2, width="stretch")
+    st.dataframe(_comp_var_df, width="stretch")
 
 with _tab_h3:
     st.markdown("#### Diversification Benefit")
@@ -574,7 +574,7 @@ with _tab_h3:
         totals={"marker": {"color": "steelblue"}},
     ))
     _fig_wf.update_layout(title="Variance Waterfall (×10⁴)", yaxis_title="Variance (×10⁴)")
-    st.plotly_chart(_fig_wf, use_container_width=True)
+    st.plotly_chart(_fig_wf, width="stretch")
 
     st.markdown("#### Pairwise Variance Contribution")
     _cov_df_disp = returns.cov() * 252
@@ -585,7 +585,7 @@ with _tab_h3:
     _fig_hm = px.imshow(_var_contrib.round(4), text_auto=".3f",
                          color_continuous_scale="RdBu_r", aspect="auto",
                          title="Pairwise Variance Contribution (×10⁴)")
-    st.plotly_chart(_fig_hm, use_container_width=True)
+    st.plotly_chart(_fig_hm, width="stretch")
 
 with _tab_h4:
     st.markdown("#### Effective Number of Bets (ENB via PCA)")
@@ -613,7 +613,7 @@ with _tab_h4:
                     "Variance Explained (%)": (_ev * 100).round(2),
                     "Cumulative (%)": (np.cumsum(_ev) * 100).round(2),
                 })
-                st.dataframe(_scree_df, use_container_width=True)
+                st.dataframe(_scree_df, width="stretch")
 
             with col2:
                 _fig_scree = go.Figure()
@@ -629,7 +629,7 @@ with _tab_h4:
                     yaxis=dict(title="Variance Explained (%)"),
                     yaxis2=dict(title="Cumulative (%)", overlaying="y", side="right"),
                 )
-                st.plotly_chart(_fig_scree, use_container_width=True)
+                st.plotly_chart(_fig_scree, width="stretch")
 
             st.markdown("#### Factor Loadings (Top 5 PCs)")
             _n_pcs = min(5, len(_ev))
@@ -641,7 +641,7 @@ with _tab_h4:
             _fig_load = px.imshow(_loadings.round(3), text_auto=".2f",
                                    color_continuous_scale="RdBu_r", aspect="auto",
                                    title="PCA Factor Loadings")
-            st.plotly_chart(_fig_load, use_container_width=True)
+            st.plotly_chart(_fig_load, width="stretch")
 
         except Exception as _pca_err:
             st.warning(f"PCA computation failed: {_pca_err}")
@@ -662,7 +662,7 @@ summary_display['Calmar Ratio'] = summary_display['Calmar Ratio'].round(3)
 summary_display['Skewness'] = summary_display['Skewness'].round(3)
 summary_display['Kurtosis'] = summary_display['Kurtosis'].round(3)
 
-st.dataframe(summary_display, use_container_width=True)
+st.dataframe(summary_display, width="stretch")
 
 # Export
 st.markdown("---")

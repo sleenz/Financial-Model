@@ -162,7 +162,7 @@ if include_charts:
 # Generate report button
 st.markdown("---")
 
-if st.button("Generate Report", type="primary", use_container_width=True):
+if st.button("Generate Report", type="primary", width="stretch"):
     with st.spinner("Generating report..."):
         try:
             # Initialize generator
@@ -286,7 +286,7 @@ if 'generated_report' in st.session_state:
             data=st.session_state['generated_report'],
             file_name=st.session_state.get('report_filename', 'portfolio_report.pdf'),
             mime="application/pdf",
-            use_container_width=True
+            width="stretch"
         )
 
     # Preview info
