@@ -12,6 +12,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
 from src.simulation.scenarios import StressTester, HISTORICAL_SCENARIOS, list_scenarios
 from src.simulation.monte_carlo import MonteCarloSimulator
+from src.simulation.historical_scenarios import (
+    HistoricalStressor,
+    HistoricalStressorConfig,
+    HISTORICAL_SCENARIOS as NEW_HISTORICAL_SCENARIOS,
+)
+# st.session_state.historical_actual_results  dict[str, HistoricalScenarioResult]
 from src.simulation.sector_stress import (
     DEFAULT_SCENARIOS,
     SectorStressConfig,
@@ -63,31 +69,122 @@ tab1, tab2, tab3, tab4 = st.tabs([
 with tab1:
     st.subheader("Historical Stress Scenarios")
 
-    # Run all scenarios
-    if st.button("Run All Historical Scenarios", type="primary"):
-        with st.spinner("Running scenarios..."):
-            results = stress_tester.run_all_historical()
+    use_actual_returns = st.toggle(
+        "Use actual per-stock returns (recommended)",
+        value=True,
+        help=(
+            "ON: pulls real price data for each stock during the crisis window. "
+            "Stocks that didn't exist yet use beta-scaled index returns. "
+            "OFF: legacy mode — applies uniform hardcoded equity drop to all holdings."
+        ),
+    )
 
-            # Display results
-            st.dataframe(results.round(2), use_container_width=True)
-
-            # Chart
-            fig = go.Figure(data=[
-                go.Bar(
-                    x=results['Scenario'],
-                    y=results['Portfolio Return'] * 100,
-                    marker_color=['red' if x < 0 else 'green' for x in results['Portfolio Return']]
-                )
-            ])
-            fig.update_layout(
-                title="Portfolio Impact by Scenario",
-                xaxis_title="Scenario",
-                yaxis_title="Return (%)",
-                xaxis_tickangle=-45
+    if use_actual_returns:
+        # ── New path — actual per-stock returns ───────────────────────────────
+        if st.button("Run All Historical Scenarios", type="primary", key="run_hist_actual"):
+            _tickers = list(returns.columns)
+            _weights_series = pd.Series(
+                {t: float(w) for t, w in zip(_tickers, weights)}
             )
-            st.plotly_chart(fig, use_container_width=True)
+            _pv = st.session_state.get("settings", {}).get("total_capital", portfolio_value)
 
-    # Individual scenario details
+            with st.spinner("Fetching actual crisis returns from yfinance…"):
+                _actual_results = stress_tester.run_historical_actual(
+                    tickers=_tickers,
+                    weights=_weights_series,
+                    portfolio_value=_pv,
+                )
+                st.session_state.historical_actual_results = _actual_results
+
+        if "historical_actual_results" in st.session_state:
+            _actual_results = st.session_state.historical_actual_results
+            _stressor = HistoricalStressor()
+            _summary_df = _stressor.to_comparison_dataframe(_actual_results)
+
+            st.dataframe(
+                _summary_df.style.format({
+                    "Index Return": "{:.1%}",
+                    "Portfolio Return": "{:.1%}",
+                    "Portfolio P&L": "${:,.0f}",
+                }).background_gradient(subset=["Portfolio Return"], cmap="RdYlGn"),
+                use_container_width=True,
+            )
+
+            # Per-scenario drill-down
+            st.markdown("---")
+            st.markdown("**Drill into scenario**")
+            _sel_scenario = st.selectbox(
+                "Select scenario",
+                options=list(_actual_results.keys()),
+                key="hist_actual_sel",
+            )
+
+            if _sel_scenario:
+                _res = _actual_results[_sel_scenario]
+                _bd = _stressor.to_stock_breakdown(_res)
+
+                st.caption(
+                    f"Index ({_res.scenario.market_index}): "
+                    f"{_res.index_return:.1%} | "
+                    f"Portfolio: {_res.portfolio_return:.1%} | "
+                    f"Actual data: {_res.n_actual}/{_res.n_actual + _res.n_beta_scaled} stocks"
+                )
+
+                def _highlight_source(row):
+                    if row["Source"] == "beta_scaled":
+                        return ["background-color: #fff3cd"] * len(row)
+                    return [""] * len(row)
+
+                st.dataframe(
+                    _bd.style
+                        .apply(_highlight_source, axis=1)
+                        .format({
+                            "Realized Return": "{:.1%}",
+                            "Beta Used": "{:.2f}",
+                            "P&L ($)": "${:,.0f}",
+                        }),
+                    use_container_width=True,
+                )
+
+                _warnings = [
+                    f"⚠️ {row['Ticker']}: {row['Warning']}"
+                    for _, row in _bd.iterrows()
+                    if row["Warning"]
+                ]
+                for _w in _warnings:
+                    st.warning(_w)
+
+                st.caption(
+                    "🟡 Yellow rows = beta-scaled (stock did not exist during this crisis). "
+                    "White rows = actual historical returns."
+                )
+
+    else:
+        # ── Legacy path — uniform hardcoded shocks (unchanged) ────────────────
+        if st.button("Run All Historical Scenarios", type="primary", key="run_hist_legacy"):
+            with st.spinner("Running scenarios..."):
+                results = stress_tester.run_all_historical()
+
+                # Display results
+                st.dataframe(results.round(2), use_container_width=True)
+
+                # Chart
+                fig = go.Figure(data=[
+                    go.Bar(
+                        x=results['Scenario'],
+                        y=results['Portfolio Return'] * 100,
+                        marker_color=['red' if x < 0 else 'green' for x in results['Portfolio Return']]
+                    )
+                ])
+                fig.update_layout(
+                    title="Portfolio Impact by Scenario",
+                    xaxis_title="Scenario",
+                    yaxis_title="Return (%)",
+                    xaxis_tickangle=-45
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+    # Individual scenario details (legacy reference — always shown)
     st.markdown("---")
     st.markdown("**Scenario Details**")
 
