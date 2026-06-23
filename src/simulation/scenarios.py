@@ -6,6 +6,12 @@ import numpy as np
 import pandas as pd
 
 from ..utils.logger import get_logger
+from src.simulation.historical_scenarios import (
+    HistoricalStressor,
+    HistoricalStressorConfig,
+    HISTORICAL_SCENARIOS as NEW_HISTORICAL_SCENARIOS,
+    HistoricalScenarioResult,
+)
 
 logger = get_logger(__name__)
 
@@ -305,6 +311,37 @@ class StressTester:
                 logger.warning(f"Failed to run scenario {scenario_key}: {e}")
 
         return pd.DataFrame(results)
+
+    def run_historical_actual(
+        self,
+        tickers: list,
+        weights: pd.Series,
+        portfolio_value: float,
+        scenarios: list = None,
+        config: HistoricalStressorConfig = None,
+    ) -> dict:
+        """
+        Run historical stress scenarios using actual per-stock returns
+        instead of uniform hardcoded shocks.
+
+        Parameters
+        ----------
+        tickers : list[str]
+        weights : pd.Series
+            Index = tickers, values = decimal weights summing to 1.
+        portfolio_value : float
+        scenarios : list[HistoricalScenario], optional
+            If None, uses HISTORICAL_SCENARIOS from historical_scenarios.py.
+        config : HistoricalStressorConfig, optional
+            If None, uses defaults.
+
+        Returns
+        -------
+        dict[str, HistoricalScenarioResult]
+            Keyed by scenario name.
+        """
+        stressor = HistoricalStressor(config or HistoricalStressorConfig())
+        return stressor.run_all(tickers, weights, portfolio_value, scenarios)
 
     def parametric_stress(
         self,
