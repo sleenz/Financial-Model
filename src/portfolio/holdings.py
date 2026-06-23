@@ -42,14 +42,16 @@ class HoldingsTracker:
             # Handle price lookup more robustly
             if len(self.current_prices) > 0:
                 if ticker in self.current_prices.index:
-                    price = self.current_prices[ticker]
+                    _raw = self.current_prices[ticker]
+                    # yfinance can return a single-element Series; extract scalar
+                    price = float(_raw.iloc[0] if isinstance(_raw, pd.Series) else _raw)
                 else:
                     logger.warning(f"No price found for {ticker}, using 0.0")
                     price = 0.0
             else:
                 price = 0.0
 
-            value = shares * price
+            value = float(shares) * price
 
             data.append({
                 'Ticker': ticker,
@@ -61,7 +63,7 @@ class HoldingsTracker:
         df = pd.DataFrame(data).set_index('Ticker')
 
         # Calculate weights
-        total_value = df['Value'].sum()
+        total_value = float(df['Value'].sum())
         if total_value > 0:
             df['Weight'] = df['Value'] / total_value
         else:
