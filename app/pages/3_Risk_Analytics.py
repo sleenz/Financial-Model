@@ -63,8 +63,9 @@ max_dd = rm.max_drawdown(prices)
 var_95 = var_calc.historical_var(0.95)
 
 # Portfolio metrics
+_rf = st.session_state.get('settings', {}).get('risk_free_rate', 0.02)
 port_vol = portfolio_returns.std() * np.sqrt(252)
-port_sharpe = (portfolio_returns.mean() * 252) / port_vol
+port_sharpe = (portfolio_returns.mean() * 252 - _rf) / port_vol if port_vol > 0 else 0.0
 port_prices = (1 + portfolio_returns).cumprod()
 port_mdd = (port_prices / port_prices.cummax() - 1).min()
 
