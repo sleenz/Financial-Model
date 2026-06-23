@@ -164,24 +164,46 @@ class PortfolioConstraints:
         """
         Apply minimum position size constraint.
 
-        Positions below min_position_size are set to zero and
-        weights are renormalized.
+        Positions below min_position_size are set to zero and weights are
+        renormalized.  The loop repeats until no position lies between 0 and
+        the threshold (renormalisation can push a borderline weight above or
+        below the limit).  If every position would be eliminated (e.g. equal-
+        weight with more assets than 1/min_position_size), the top-k assets
+        that can satisfy the constraint receive equal weight as a fallback.
 
         Args:
             weights: Portfolio weights
 
         Returns:
-            Adjusted weights
+            Adjusted weights with all non-zero positions >= min_position_size
         """
         if self.min_position_size <= 0:
             return weights
 
         adjusted = weights.copy()
-        adjusted[np.abs(adjusted) < self.min_position_size] = 0
 
-        # Renormalize
-        total = np.sum(adjusted)
-        if total > 0:
+        for _ in range(len(weights) + 1):
+            below = (adjusted > 0) & (np.abs(adjusted) < self.min_position_size)
+            if not below.any():
+                break
+
+            adjusted[below] = 0
+            total = np.sum(adjusted)
+
+            if total <= 0:
+                # All positions were eliminated by the threshold.
+                # Fallback: keep only the top-k largest (by original weight)
+                # where k = floor(1 / min_position_size) so equal weight >= threshold.
+                # Use `continue` (not `break`) so the next loop iteration can
+                # re-filter any fallback weights that are still below the threshold.
+                max_k = max(1, int(1.0 / self.min_position_size))
+                top_idx = np.argsort(weights)[::-1][:max_k]
+                adjusted = np.zeros_like(weights)
+                top_w = weights[top_idx]
+                w_sum = top_w.sum()
+                adjusted[top_idx] = (top_w / w_sum) if w_sum > 0 else np.full(max_k, 1.0 / max_k)
+                continue
+
             adjusted = adjusted / total
 
         return adjusted
