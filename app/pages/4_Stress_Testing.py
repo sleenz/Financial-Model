@@ -205,8 +205,8 @@ with tab1:
 
         with col2:
             chars = scenario['characteristics']
-            st.metric("Equity Drop", f"{chars['equity_drop']*100:.0f}%")
-            st.metric("Volatility Spike", f"{chars['volatility_spike']:.1f}x")
+            #st.metric("Equity Drop", f"{chars['equity_drop']*100:.0f}%")
+            #st.metric("Volatility Spike", f"{chars['volatility_spike']:.1f}x")
 
 with tab2:
     st.subheader("Monte Carlo Simulation")
