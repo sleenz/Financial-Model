@@ -203,26 +203,21 @@ class MacroSensitivityEstimator:
         t0 = time.time()
         warnings: list[str] = []
 
-        # Step 1: Resample sector returns to weekly if daily
-        if len(sector_returns) > 260 and len(sector_returns) > len(macro_data) * 2:
-            sr_weekly = sector_returns.resample("W").sum()
+        # Step 1: Resample sector_returns to weekly if it looks daily/business-daily
+        if len(sector_returns) > 1:
+            _total_span = (sector_returns.index[-1] - sector_returns.index[0]).days
+            _avg_gap = _total_span / max(1, len(sector_returns) - 1)
+            if _avg_gap < 4:  # ≤3 day average gap → daily or business-daily
+                sr_weekly = sector_returns.resample("W").sum()
+            else:
+                sr_weekly = sector_returns.copy()
         else:
             sr_weekly = sector_returns.copy()
 
-        # Align to common weekly dates
+        # Align to common weekly dates (direct intersection first)
         common_idx = sr_weekly.index.intersection(macro_data.index)
-        if len(common_idx) == 0:
-            # Try approximate alignment (nearest week)
-            common_idx = sr_weekly.index[
-                sr_weekly.index.isin(macro_data.index)
-                | np.isin(
-                    sr_weekly.index.to_period("W").astype(str),
-                    macro_data.index.to_period("W").astype(str),
-                )
-            ]
-
         if len(common_idx) < self._config.min_observations:
-            # Fallback: use reindexed merge
+            # Fallback: outer-join + ffill bridges weekly vs monthly macro variables
             merged = pd.concat(
                 [sr_weekly, macro_data], axis=1, join="outer"
             ).ffill().dropna()
