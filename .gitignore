@@ -128,7 +128,7 @@ logs/
 !examples/*.pdf
 
 # Runtime data artifacts (model caches, macro parameter DB, price cache)
-data/
+/data/
 
 # IDE
 .idea/

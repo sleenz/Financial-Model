@@ -93,8 +93,9 @@ class MacroShock:
 
     All values in the same units as the transformed macro variables:
     - Rate variables (US_10Y, BI_RATE, VIX): bps-equivalent change.
-    - FX/commodity/equity (DXY, IDR_USD, CPO, COAL, NICKEL): decimal pct change.
-    - PMI: level change from current value (e.g., -3.0 = PMI falls 3 points).
+    - FX/commodity/equity/indices (DXY, IDR_USD, CPO, COAL, NICKEL, CHINA_PMI):
+      decimal pct change (e.g., -0.08 = -8% weekly move).
+    - CHINA_PMI is FXI weekly pct_change, not PMI points.
 
     Default of 0.0 for all = no shock (baseline).
     """
@@ -196,7 +197,7 @@ DEFAULT_MACRO_SCENARIOS: list[MacroStressScenario] = [
     ),
     MacroStressScenario(
         name="China Demand Shock",
-        shock=MacroShock(china_pmi_delta=-3.0, cpo_pct=-0.15, nickel_pct=-0.25),
+        shock=MacroShock(china_pmi_delta=-0.08, cpo_pct=-0.15, nickel_pct=-0.25),
         description="Chinese factory activity contracts — commodity demand collapse",
         tags=["commodity", "China", "idxrelevant"],
         historical_reference="2015 China slowdown",
