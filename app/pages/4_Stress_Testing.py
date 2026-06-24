@@ -694,10 +694,36 @@ with tab4:
                     "copula_var_return": "{:+.2%}",
                     "pnl_contribution_beta": "${:,.0f}",
                     "pnl_contribution_copula": "${:,.0f}",
+                    "stock_beta": "{:.2f}",
                 }),
                 width="stretch",
                 height=340,
             )
+            st.caption(
+                "Stock Beta = individual stock's sensitivity to its sector ETF "
+                "(XLF, XLP etc). beta_implied_return = sector_shock × stock_beta. "
+                "IDX tickers (.JK) use ^JKSE as market proxy — no IDX sector ETFs available."
+            )
+            if hasattr(_engine, "_stock_betas") and _engine._stock_betas is not None:
+                _idx_tickers = [
+                    t for t, e in _engine._stock_betas.betas.items()
+                    if e.source == "idx_market_proxy"
+                ]
+                if _idx_tickers:
+                    st.warning(
+                        f"⚠️ IDX tickers {_idx_tickers}: beta estimated vs JCI (^JKSE), "
+                        f"not a sector ETF. Less precise than US sector ETF betas."
+                    )
+                _low_r2_tickers = [
+                    f"{t} (R²={e.r_squared:.2f})"
+                    for t, e in _engine._stock_betas.betas.items()
+                    if e.r_squared is not None and e.r_squared < 0.05
+                ]
+                if _low_r2_tickers:
+                    st.warning(
+                        f"⚠️ Low R² betas (unreliable): {', '.join(_low_r2_tickers)}. "
+                        f"Defaulting to beta=1.0 recommended for these."
+                    )
 
             # Most exposed / natural hedges
             _exp_col, _hdg_col = st.columns(2)
