@@ -513,7 +513,10 @@ class MacroDataFetcher:
 
     def _fetch_fred(self, series_id: str, start: str, end: str) -> pd.Series:
         """
-        Fetch series from FRED via fredapi with pandas_datareader fallback.
+        Fetch series from FRED via fredapi (preferred) with pandas_datareader fallback.
+
+        Reads FRED_API_KEY from config or the FRED_API_KEY environment variable
+        (set in .env — loaded automatically via dotenv at import time).
 
         Parameters
         ----------
@@ -529,9 +532,16 @@ class MacroDataFetcher:
         """
         api_key = self._config.fred_api_key or os.environ.get("FRED_API_KEY", "")
 
-        if _FREDAPI_AVAILABLE and api_key:
+        if not api_key:
+            logger.warning(
+                f"FRED_API_KEY not set — fetching {series_id} via pandas_datareader "
+                "(unauthenticated CSV). Add FRED_API_KEY to your .env for reliable access."
+            )
+
+        if _FREDAPI_AVAILABLE:
             try:
-                fred = _Fred(api_key=api_key)
+                fred_kwargs = {"api_key": api_key} if api_key else {}
+                fred = _Fred(**fred_kwargs)
                 data = fred.get_series(series_id, observation_start=start, observation_end=end)
                 if data is None or data.empty:
                     raise ValueError(f"FRED returned empty series for {series_id}")
@@ -540,9 +550,16 @@ class MacroDataFetcher:
                 series.index = pd.DatetimeIndex(series.index)
                 return series
             except Exception as exc:
-                logger.debug(f"fredapi fetch failed for {series_id}: {exc}; trying datareader")
+                logger.warning(
+                    f"fredapi fetch failed for {series_id}: {exc}; "
+                    "falling back to pandas_datareader"
+                )
+        else:
+            logger.warning(
+                "fredapi not installed — install it with: pip install fredapi>=0.5.0"
+            )
 
-        # Fallback: pandas_datareader
+        # Fallback: pandas_datareader (unauthenticated CSV)
         try:
             import pandas_datareader.data as web
             df = web.DataReader(series_id, "fred", start=start, end=end)
@@ -553,8 +570,9 @@ class MacroDataFetcher:
             return series
         except ImportError:
             raise RuntimeError(
-                f"Neither fredapi (with API key) nor pandas_datareader is available "
-                f"for FRED series '{series_id}'"
+                f"Neither fredapi nor pandas_datareader is available "
+                f"for FRED series '{series_id}'. "
+                "Install fredapi>=0.5.0 and set FRED_API_KEY in .env."
             )
 
     def _apply_transform(self, series: pd.Series, transform: str) -> pd.Series:
