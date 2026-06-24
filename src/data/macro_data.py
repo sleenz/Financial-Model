@@ -61,6 +61,17 @@ except ImportError:
     _nx = None
     _NETWORKX_AVAILABLE = False
 
+try:
+    import tradingeconomics as _te
+    _TE_AVAILABLE = True
+except ImportError:
+    _te = None
+    _TE_AVAILABLE = False
+    logger.warning(
+        "tradingeconomics not installed — TE sources will fail. "
+        "Install with: pip install tradingeconomics"
+    )
+
 
 # ── Variable configuration ────────────────────────────────────────────────────
 
@@ -104,93 +115,93 @@ class MacroVariableConfig:
 DEFAULT_MACRO_VARIABLES: list[MacroVariableConfig] = [
     MacroVariableConfig(
         name="DXY",
-        primary_ticker="DX-Y.NYB",
-        primary_source="yfinance",
-        fallback_ticker="DTWEXBGS",
-        fallback_source="fred",
+        primary_ticker="DXY:CUR",
+        primary_source="te_market",
+        fallback_ticker="DX-Y.NYB",
+        fallback_source="yfinance",
         transform="pct_change",
         frequency="W",
         description="US Dollar Index — primary EM risk driver",
     ),
     MacroVariableConfig(
         name="VIX",
-        primary_ticker="^VIX",
-        primary_source="yfinance",
-        fallback_ticker="VIXCLS",
-        fallback_source="fred",
+        primary_ticker="VIX:IND",
+        primary_source="te_market",
+        fallback_ticker="^VIX",
+        fallback_source="yfinance",
         transform="diff",
         frequency="W",
         description="CBOE Volatility Index — global risk-off signal",
     ),
     MacroVariableConfig(
         name="US_10Y",
-        primary_ticker="DGS10",
-        primary_source="fred",
-        fallback_ticker="^TNX",
-        fallback_source="yfinance",
+        primary_ticker="USGG10YR:IND",
+        primary_source="te_market",
+        fallback_ticker="DGS10",
+        fallback_source="fred",
         transform="diff",
         frequency="W",
         description="US 10Y Treasury yield change (bps)",
     ),
     MacroVariableConfig(
         name="BI_RATE",
-        primary_ticker="IDDM01STM086N",
-        primary_source="fred",
-        fallback_ticker="INTDSRIDRM193N",
-        fallback_source="fred",
+        primary_ticker="Indonesia|Interest Rate",
+        primary_source="te_indicator",
+        fallback_ticker=None,
+        fallback_source=None,
         transform="diff",
         frequency="M",
-        description="Bank Indonesia policy rate change — OECD STR Indonesia (bps)",
+        description="Bank Indonesia policy rate change (bps) — TE indicator",
     ),
     MacroVariableConfig(
         name="IDR_USD",
-        primary_ticker="IDR=X",
-        primary_source="yfinance",
-        fallback_ticker="DEXINUS",
-        fallback_source="fred",
+        primary_ticker="USDIDR:CUR",
+        primary_source="te_market",
+        fallback_ticker="IDR=X",
+        fallback_source="yfinance",
         transform="pct_change",
         frequency="W",
-        description="IDR/USD exchange rate — positive = IDR weakening",
+        description="USD/IDR exchange rate — positive = IDR weakening",
     ),
     MacroVariableConfig(
         name="CHINA_PMI",
-        primary_ticker="FXI",
-        primary_source="yfinance",
-        fallback_ticker="MCHI",
-        fallback_source="yfinance",
-        transform="pct_change",
-        frequency="W",
-        description="China demand proxy — iShares China Large-Cap ETF pct-change",
+        primary_ticker="China|NBS Manufacturing PMI",
+        primary_source="te_indicator",
+        fallback_ticker=None,
+        fallback_source=None,
+        transform="diff",
+        frequency="M",
+        description="China NBS Manufacturing PMI — month-over-month point change",
     ),
     MacroVariableConfig(
         name="CPO",
-        primary_ticker="PPOILUSDM",
-        primary_source="fred",
-        fallback_ticker="BO=F",
-        fallback_source="yfinance",
+        primary_ticker="CPO1:COM",
+        primary_source="te_market",
+        fallback_ticker="PPOILUSDM",
+        fallback_source="fred",
         transform="pct_change",
-        frequency="M",
-        description="Palm oil price (World Bank, USD/MT) — IDX #1 agricultural export",
+        frequency="W",
+        description="Palm oil futures (Bursa Malaysia) — IDX #1 agricultural export",
     ),
     MacroVariableConfig(
         name="COAL",
-        primary_ticker="MTF=F",
-        primary_source="yfinance",
-        fallback_ticker="PCOALAUUSDM",
-        fallback_source="fred",
+        primary_ticker="NEWC:COM",
+        primary_source="te_market",
+        fallback_ticker="MTF=F",
+        fallback_source="yfinance",
         transform="pct_change",
         frequency="W",
         description="Newcastle thermal coal — IDX key commodity",
     ),
     MacroVariableConfig(
         name="NICKEL",
-        primary_ticker="PNICKUSDM",
-        primary_source="fred",
-        fallback_ticker="VALE",
-        fallback_source="yfinance",
+        primary_ticker="LMENIS3:COM",
+        primary_source="te_market",
+        fallback_ticker="PNICKUSDM",
+        fallback_source="fred",
         transform="pct_change",
-        frequency="M",
-        description="Nickel price (World Bank, USD/MT) — ANTM, INCO; EV battery demand proxy",
+        frequency="W",
+        description="LME Nickel 3-month — ANTM, INCO; EV battery demand proxy",
     ),
 ]
 
@@ -222,6 +233,7 @@ class MacroDataConfig:
     )
     start_date: str = field(default="2005-01-01")
     cache_ttl_seconds: int = field(default=3600)
+    te_api_key: Optional[str] = field(default=None)
     fred_api_key: Optional[str] = field(default=None)
     fill_method: str = field(default="ffill")
     min_overlap_pct: float = field(default=0.70)
@@ -476,11 +488,122 @@ class MacroDataFetcher:
         self, ticker: str, source: str, start: str, end: str
     ) -> pd.Series:
         """Dispatch to the correct source fetcher."""
+        if source == "te_market":
+            return self._fetch_te_market(ticker, start, end)
+        if source == "te_indicator":
+            return self._fetch_te_indicator(ticker, start, end)
         if source == "yfinance":
             return self._fetch_yfinance(ticker, start, end)
         if source == "fred":
             return self._fetch_fred(ticker, start, end)
         raise ValueError(f"Unknown source '{source}'")
+
+    def _fetch_te_market(self, symbol: str, start: str, end: str) -> pd.Series:
+        """
+        Fetch historical market data from Trading Economics.
+
+        Parameters
+        ----------
+        symbol : str
+            Trading Economics market symbol, e.g. "DXY:CUR", "VIX:IND",
+            "CPO1:COM", "NEWC:COM", "LMENIS3:COM", "USDIDR:CUR".
+        start, end : str
+            ISO date strings.
+
+        Returns
+        -------
+        pd.Series
+            Close price series, index = DatetimeIndex (tz-naive).
+        """
+        if not _TE_AVAILABLE:
+            raise RuntimeError(
+                "tradingeconomics not installed — pip install tradingeconomics"
+            )
+        api_key = self._config.te_api_key or os.environ.get("TE_API_KEY", "")
+        if not api_key:
+            raise RuntimeError(
+                f"TE_API_KEY not set — cannot fetch {symbol}. "
+                "Add TE_API_KEY to your .env file."
+            )
+        _te.login(api_key)
+        df = _te.getHistoricalBySymbol(
+            symbol=symbol, initDate=start, endDate=end, output_type="df"
+        )
+        if df is None or (hasattr(df, "empty") and df.empty):
+            raise ValueError(f"Trading Economics returned empty data for {symbol}")
+        date_col = next(
+            (c for c in df.columns if c.lower() == "date"), None
+        )
+        close_col = next(
+            (c for c in df.columns if c.lower() in ("close", "value", "last")), None
+        )
+        if date_col is None or close_col is None:
+            raise ValueError(
+                f"Unexpected TE market columns for {symbol}: {df.columns.tolist()}"
+            )
+        df[date_col] = pd.to_datetime(df[date_col])
+        series = df.set_index(date_col)[close_col].dropna().sort_index()
+        series.index = pd.DatetimeIndex(series.index).tz_localize(None)
+        series.name = symbol
+        return series
+
+    def _fetch_te_indicator(self, country_indicator: str, start: str, end: str) -> pd.Series:
+        """
+        Fetch historical economic indicator from Trading Economics.
+
+        Parameters
+        ----------
+        country_indicator : str
+            Pipe-separated "Country|Indicator" string, e.g.
+            "Indonesia|Interest Rate" or "China|NBS Manufacturing PMI".
+        start, end : str
+            ISO date strings.
+
+        Returns
+        -------
+        pd.Series
+            Indicator value series, index = DatetimeIndex (tz-naive).
+        """
+        if not _TE_AVAILABLE:
+            raise RuntimeError(
+                "tradingeconomics not installed — pip install tradingeconomics"
+            )
+        api_key = self._config.te_api_key or os.environ.get("TE_API_KEY", "")
+        if not api_key:
+            raise RuntimeError(
+                f"TE_API_KEY not set — cannot fetch {country_indicator}. "
+                "Add TE_API_KEY to your .env file."
+            )
+        country, indicator = country_indicator.split("|", 1)
+        _te.login(api_key)
+        df = _te.getHistoricalData(
+            country=country.strip(),
+            indicator=indicator.strip(),
+            initDate=start,
+            endDate=end,
+            output_type="df",
+        )
+        if df is None or (hasattr(df, "empty") and df.empty):
+            raise ValueError(
+                f"Trading Economics returned empty data for "
+                f"{country.strip()}/{indicator.strip()}"
+            )
+        date_col = next(
+            (c for c in df.columns if c.lower() in ("datetime", "date")), None
+        )
+        val_col = next(
+            (c for c in df.columns if c.lower() == "value"), None
+        )
+        if date_col is None or val_col is None:
+            raise ValueError(
+                f"Unexpected TE indicator columns for {country_indicator}: "
+                f"{df.columns.tolist()}"
+            )
+        df[date_col] = pd.to_datetime(df[date_col])
+        series = df.set_index(date_col)[val_col].dropna().sort_index()
+        series.index = pd.DatetimeIndex(series.index).tz_localize(None)
+        series.name = country_indicator
+        return series
 
     def _fetch_yfinance(self, ticker: str, start: str, end: str) -> pd.Series:
         """
