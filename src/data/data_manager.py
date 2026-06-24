@@ -477,6 +477,27 @@ class DataManager:
         self.sources = new_order
         logger.info(f"Source priority updated: {[s.name for s in self.sources]}")
 
+    def get_macro_data(self, config=None, start_date=None):
+        """
+        Fetch macro variables via MacroDataFetcher.
+
+        Parameters
+        ----------
+        config : MacroDataConfig, optional
+            Configuration for macro variable fetching. Uses defaults when None.
+        start_date : str, optional
+            Override start date (ISO format). Reads config.start_date when None.
+
+        Returns
+        -------
+        MacroDataResult
+            Container with raw_levels, transformed, aligned_weekly DataFrames.
+        """
+        from src.data.macro_data import MacroDataFetcher, MacroDataConfig
+        cfg = config or MacroDataConfig()
+        fetcher = MacroDataFetcher(cfg)
+        return fetcher.fetch(start_date=start_date)
+
 
 def get_data(
     tickers: Union[str, List[str]],

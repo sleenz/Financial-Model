@@ -127,6 +127,9 @@ logs/
 !examples/*.csv
 !examples/*.pdf
 
+# Runtime data artifacts (model caches, macro parameter DB, price cache)
+data/
+
 # IDE
 .idea/
 .vscode/

@@ -62,8 +62,8 @@ stress_tester = StressTester(returns, weights, portfolio_value)
 st.markdown("---")
 
 # Tabs
-tab1, tab2, tab3, tab4 = st.tabs([
-    "Historical Scenarios", "Monte Carlo", "Custom Stress", "🔬 Sector Shock"
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "Historical Scenarios", "Monte Carlo", "Custom Stress", "🔬 Sector Shock", "🌐 Macro Contagion"
 ])
 
 with tab1:
@@ -833,6 +833,479 @@ with tab4:
                 legend=dict(orientation="h", yanchor="bottom", y=1.02),
             )
             st.plotly_chart(_fig_cmp, width="stretch")
+
+
+with tab5:
+    st.subheader("Macro Contagion Stress Test")
+    st.markdown(
+        "Applies macroeconomic shocks via the **Leontief Input-Output** contagion model. "
+        "A macro sensitivity matrix maps factor shocks to initial sector distress; "
+        "the Leontief inverse then amplifies distress through inter-sector linkages."
+    )
+
+    # ── Import guard ──────────────────────────────────────────────────────────
+    try:
+        from src.simulation.macro_stress import (
+            MacroStressEngine,
+            MacroStressConfig,
+            DEFAULT_MACRO_SCENARIOS,
+            MacroShock,
+            MacroStressScenario,
+        )
+        from src.data.macro_data import MacroDataConfig
+        from src.risk.macro_sensitivity import MacroSensitivityConfig
+        from src.risk.contagion import ContagionConfig
+        _MACRO_AVAILABLE = True
+    except ImportError as _ie:
+        st.error(f"Macro Contagion module unavailable: {_ie}")
+        _MACRO_AVAILABLE = False
+
+    if _MACRO_AVAILABLE:
+        # ── Configuration expander ────────────────────────────────────────────
+        with st.expander("Macro Engine Configuration", expanded=False):
+            _mc_col1, _mc_col2, _mc_col3 = st.columns(3)
+
+            with _mc_col1:
+                st.markdown("**Macro Data**")
+                _mc_start = st.text_input(
+                    "History start date", value="2005-01-01", key="macro_stress_start_date"
+                )
+                _mc_ttl = st.number_input(
+                    "Cache TTL (s)", 600, 86400, 3600, step=600, key="macro_stress_cache_ttl"
+                )
+
+            with _mc_col2:
+                st.markdown("**Sensitivity Estimation**")
+                _mc_window = st.number_input(
+                    "Estimation window (days)", 252, 3780, 1260, step=126,
+                    key="macro_stress_est_window",
+                )
+                _mc_reg = st.selectbox(
+                    "Regularization", ["ridge", "ols"], key="macro_stress_reg"
+                )
+                _mc_alpha = st.number_input(
+                    "Ridge α", 0.001, 1.0, 0.01, step=0.001, format="%.3f",
+                    key="macro_stress_ridge_alpha",
+                )
+
+            with _mc_col3:
+                st.markdown("**Contagion Network**")
+                _mc_norm = st.selectbox(
+                    "Weight normalization", ["spectral", "row_sum"], key="macro_stress_norm"
+                )
+                _mc_margin = st.number_input(
+                    "Spectral safety margin", 0.01, 0.20, 0.05, step=0.01,
+                    key="macro_stress_margin",
+                )
+                _mc_idr = st.checkbox(
+                    "Enable IDR feedback loop", value=True, key="macro_stress_idr"
+                )
+                _mc_pv = st.number_input(
+                    "Portfolio value ($)", 1_000, 1_000_000_000,
+                    value=int(st.session_state.get("settings", {}).get("total_capital", 1_000_000)),
+                    step=10_000, key="macro_stress_portfolio_value",
+                )
+
+        # ── Fit button ────────────────────────────────────────────────────────
+        st.markdown("---")
+        _mc_fit_col1, _mc_fit_col2 = st.columns(2)
+        with _mc_fit_col1:
+            _mc_fit_btn = st.button(
+                "Fit Macro Contagion Engine", type="primary", key="macro_stress_fit_btn"
+            )
+        with _mc_fit_col2:
+            _mc_refit_btn = st.button(
+                "Force Re-estimate", key="macro_stress_refit_btn"
+            )
+
+        if "ss_sector_map" not in st.session_state:
+            st.info(
+                "Sector map not available. Run **Fetch Sectors & Fit Models** in "
+                "the 🔬 Sector Shock tab first to classify tickers into sectors."
+            )
+        elif _mc_fit_btn or _mc_refit_btn:
+            _sector_map_mc = st.session_state.ss_sector_map
+
+            _macro_cfg = MacroStressConfig(
+                macro_data_config=MacroDataConfig(
+                    start_date=str(st.session_state.macro_stress_start_date),
+                    cache_ttl_seconds=int(st.session_state.macro_stress_cache_ttl),
+                ),
+                sensitivity_config=MacroSensitivityConfig(
+                    estimation_window_days=int(st.session_state.macro_stress_est_window),
+                    regularization=str(st.session_state.macro_stress_reg),
+                    ridge_alpha=float(st.session_state.macro_stress_ridge_alpha),
+                ),
+                contagion_config=ContagionConfig(
+                    normalization=str(st.session_state.macro_stress_norm),
+                    spectral_safety_margin=float(st.session_state.macro_stress_margin),
+                    idr_feedback_enabled=bool(st.session_state.macro_stress_idr),
+                ),
+                portfolio_value=float(st.session_state.macro_stress_portfolio_value),
+            )
+
+            with st.spinner("Fitting macro contagion engine (fetching FRED + yfinance data)…"):
+                try:
+                    _mc_engine = MacroStressEngine(
+                        returns=returns,
+                        sector_map=_sector_map_mc,
+                        config=_macro_cfg,
+                    )
+                    _mc_engine.fit(force_reestimate=bool(_mc_refit_btn))
+                    st.session_state.macro_stress_engine = _mc_engine
+                    st.session_state.macro_stress_cfg = _macro_cfg
+                    st.session_state.pop("macro_stress_result", None)
+                    st.session_state.pop("macro_stress_all_results", None)
+                    st.success("Macro contagion engine fitted.")
+                    st.rerun()
+                except Exception as _me:
+                    st.error(f"Engine fitting failed: {_me}")
+
+        # ── Engine status ─────────────────────────────────────────────────────
+        if "macro_stress_engine" in st.session_state:
+            _mc_eng = st.session_state.macro_stress_engine
+            _mc_summary = _mc_eng.get_fit_summary()
+
+            _mc_fit_cols = st.columns(len(_mc_summary))
+            for _i, (_, _row) in enumerate(_mc_summary.iterrows()):
+                _status_ok = _row["Status"] == "OK"
+                _mc_fit_cols[_i].metric(
+                    _row["Component"],
+                    "OK" if _status_ok else _row["Status"],
+                    help=str(_row["Details"]),
+                )
+
+            st.markdown("---")
+
+            # ── Sensitivity and contagion matrix heatmaps ─────────────────────
+            _sm1, _sm2 = st.columns(2)
+            with _sm1:
+                with st.expander("Macro Sensitivity Matrix (S)", expanded=True):
+                    try:
+                        _S_df = _mc_eng.get_sensitivity_heatmap_data()
+                        if not _S_df.empty:
+                            _fig_S = px.imshow(
+                                _S_df.round(4),
+                                color_continuous_scale="RdBu_r",
+                                color_continuous_midpoint=0,
+                                text_auto=".3f",
+                                title="Sector ← Macro Factor Sensitivities",
+                                labels={"x": "Macro Factor", "y": "Sector"},
+                            )
+                            _fig_S.update_layout(height=400)
+                            st.plotly_chart(_fig_S, width="stretch")
+                        else:
+                            st.info("Sensitivity matrix not yet estimated.")
+                    except Exception as _se:
+                        st.error(f"S matrix display failed: {_se}")
+
+            with _sm2:
+                with st.expander("Contagion Weight Matrix (W)", expanded=True):
+                    try:
+                        _W_df = _mc_eng._W
+                        if _W_df is not None and not _W_df.empty:
+                            _fig_W = px.imshow(
+                                _W_df.round(4),
+                                color_continuous_scale="YlOrRd",
+                                text_auto=".3f",
+                                title="Sector → Sector Contagion Weights",
+                                labels={"x": "To Sector", "y": "From Sector"},
+                            )
+                            _fig_W.update_layout(height=400)
+                            st.plotly_chart(_fig_W, width="stretch")
+                        else:
+                            st.info("Contagion weight matrix not yet computed.")
+                    except Exception as _we:
+                        st.error(f"W matrix display failed: {_we}")
+
+            st.markdown("---")
+
+            # ── Scenario selection ────────────────────────────────────────────
+            st.subheader("Macro Scenario")
+
+            _mc_scenario_names = [s.name for s in DEFAULT_MACRO_SCENARIOS] + ["Custom…"]
+            _mc_sel_name = st.selectbox(
+                "Select macro scenario", _mc_scenario_names, key="macro_stress_scenario_name"
+            )
+
+            if _mc_sel_name == "Custom…":
+                st.markdown("**Define custom macro shock:**")
+                _cs_col1, _cs_col2, _cs_col3 = st.columns(3)
+                with _cs_col1:
+                    _dxy = st.number_input(
+                        "DXY change (%)", -20.0, 20.0, 0.0, step=0.5, key="mc_dxy"
+                    )
+                    _vix = st.number_input(
+                        "VIX delta (pts)", -30.0, 80.0, 0.0, step=1.0, key="mc_vix"
+                    )
+                    _10y = st.number_input(
+                        "US 10Y change (bps)", -200.0, 300.0, 0.0, step=10.0, key="mc_10y"
+                    )
+                with _cs_col2:
+                    _bi = st.number_input(
+                        "BI Rate change (bps)", -100.0, 200.0, 0.0, step=25.0, key="mc_bi"
+                    )
+                    _idr_shock = st.number_input(
+                        "IDR/USD change (%)", -20.0, 30.0, 0.0, step=0.5, key="mc_idr_shock"
+                    )
+                    _pmi = st.number_input(
+                        "China PMI delta (pts)", -10.0, 10.0, 0.0, step=0.5, key="mc_pmi"
+                    )
+                with _cs_col3:
+                    _cpo = st.number_input(
+                        "CPO change (%)", -50.0, 80.0, 0.0, step=2.0, key="mc_cpo"
+                    )
+                    _coal = st.number_input(
+                        "Coal change (%)", -50.0, 100.0, 0.0, step=2.0, key="mc_coal"
+                    )
+                    _ni = st.number_input(
+                        "Nickel change (%)", -50.0, 100.0, 0.0, step=2.0, key="mc_nickel"
+                    )
+                _mc_custom_name = st.text_input(
+                    "Scenario name", value="Custom Shock", key="mc_custom_name"
+                )
+                _mc_active_scenario = MacroStressScenario(
+                    name=_mc_custom_name,
+                    shock=MacroShock(
+                        dxy_pct=float(_dxy),
+                        vix_delta=float(_vix),
+                        us_10y_bps=float(_10y),
+                        bi_rate_bps=float(_bi),
+                        idr_usd_pct=float(_idr_shock),
+                        china_pmi_delta=float(_pmi),
+                        cpo_pct=float(_cpo),
+                        coal_pct=float(_coal),
+                        nickel_pct=float(_ni),
+                    ),
+                    description="User-defined macro shock",
+                    tags=["custom"],
+                )
+            else:
+                _mc_active_scenario = next(
+                    s for s in DEFAULT_MACRO_SCENARIOS if s.name == _mc_sel_name
+                )
+                _mc_dc1, _mc_dc2 = st.columns([2, 1])
+                with _mc_dc1:
+                    st.markdown(f"**{_mc_active_scenario.name}**")
+                    st.caption(_mc_active_scenario.description)
+                    if _mc_active_scenario.historical_reference:
+                        st.caption(
+                            f"Historical reference: {_mc_active_scenario.historical_reference}"
+                        )
+                with _mc_dc2:
+                    st.markdown("**Shocks:**")
+                    _shock_obj = _mc_active_scenario.shock
+                    for _fname, _fval in [
+                        ("DXY", _shock_obj.dxy_pct),
+                        ("VIX", _shock_obj.vix_delta),
+                        ("US 10Y (bps)", _shock_obj.us_10y_bps),
+                        ("BI Rate (bps)", _shock_obj.bi_rate_bps),
+                        ("IDR/USD", _shock_obj.idr_usd_pct),
+                        ("China PMI", _shock_obj.china_pmi_delta),
+                        ("CPO", _shock_obj.cpo_pct),
+                        ("Coal", _shock_obj.coal_pct),
+                        ("Nickel", _shock_obj.nickel_pct),
+                    ]:
+                        if _fval != 0.0:
+                            _mc_clr = "red" if _fval < 0 else "green"
+                            st.markdown(f"- {_fname}: :{_mc_clr}[{_fval:+.1f}]")
+
+            # ── Run buttons ───────────────────────────────────────────────────
+            _mc_rb1, _mc_rb2 = st.columns(2)
+            with _mc_rb1:
+                _mc_run_single = st.button(
+                    f"Run: {_mc_active_scenario.name}",
+                    type="primary",
+                    key="macro_stress_run_single",
+                )
+            with _mc_rb2:
+                _mc_run_all = st.button(
+                    "Run All Macro Scenarios", key="macro_stress_run_all"
+                )
+
+            _mc_tickers = list(returns.columns)
+            _mc_holdings = {t: float(w) for t, w in zip(_mc_tickers, weights)}
+
+            if _mc_run_single:
+                with st.spinner(f"Running macro scenario '{_mc_active_scenario.name}'…"):
+                    try:
+                        _mc_result = _mc_eng.run_stress(_mc_active_scenario, _mc_holdings)
+                        st.session_state.macro_stress_result = _mc_result
+                    except Exception as _mre:
+                        st.error(f"Scenario run failed: {_mre}")
+
+            if _mc_run_all:
+                with st.spinner("Running all macro scenarios…"):
+                    try:
+                        _mc_all = _mc_eng.run_all_scenarios(_mc_holdings)
+                        st.session_state.macro_stress_all_results = _mc_all
+                    except Exception as _mrae:
+                        st.error(f"Scenario batch failed: {_mrae}")
+
+            # ── Single result display ─────────────────────────────────────────
+            if "macro_stress_result" in st.session_state:
+                _mr = st.session_state.macro_stress_result
+
+                st.markdown("---")
+                st.subheader(f"Results — {_mr.scenario.name}")
+
+                _cascade_colors = {"low": "green", "warning": "orange", "critical": "red"}
+                _mr_cc = _cascade_colors.get(_mr.cascade_risk, "gray")
+                st.markdown(
+                    f"**Cascade Risk:** :{_mr_cc}[{_mr.cascade_risk.upper()}] "
+                    f"| Spectral Radius: {_mr.spectral_radius:.4f}"
+                )
+
+                _mr_c1, _mr_c2, _mr_c3, _mr_c4 = st.columns(4)
+                _mr_c1.metric("Direct P&L", f"${_mr.total_pnl_direct:,.0f}")
+                _mr_c2.metric("Contagion P&L", f"${_mr.total_pnl_total:,.0f}")
+                _mr_amp = (
+                    f"{(_mr.total_pnl_total / _mr.total_pnl_direct):.2f}x"
+                    if abs(_mr.total_pnl_direct) > 1.0 else "N/A"
+                )
+                _mr_c3.metric("Amplification", _mr_amp)
+                _mr_c4.metric("Iterations", str(_mr.contagion.n_iterations))
+
+                st.markdown("#### Leontief Multiplier Table")
+                if not _mr.multiplier_table.empty:
+                    st.dataframe(
+                        _mr.multiplier_table.style.format("{:.4f}"),
+                        width="stretch",
+                    )
+
+                st.markdown("#### Systemic Importance (Eigenvector Centrality)")
+                if not _mr.systemic_importance.empty:
+                    _si_sorted = _mr.systemic_importance.sort_values(ascending=False)
+                    _fig_si = px.bar(
+                        _si_sorted,
+                        color=_si_sorted,
+                        color_continuous_scale="YlOrRd",
+                        labels={"value": "Eigenvector Centrality", "index": "Sector"},
+                        title="Sector Systemic Importance in Contagion Network",
+                    )
+                    _fig_si.update_layout(showlegend=False, height=350)
+                    st.plotly_chart(_fig_si, width="stretch")
+
+                st.markdown("#### Holdings Contagion Impact")
+                _mr_df = _mr.to_dataframe()
+                if not _mr_df.empty:
+                    _mc_fmt = {}
+                    for _col, _fmt in [
+                        ("weight", "{:.2%}"),
+                        ("direct_return", "{:+.3%}"),
+                        ("total_return", "{:+.3%}"),
+                        ("pnl_direct", "${:,.0f}"),
+                        ("pnl_total", "${:,.0f}"),
+                        ("amplification", "{:.2f}x"),
+                    ]:
+                        if _col in _mr_df.columns:
+                            _mc_fmt[_col] = _fmt
+
+                    st.dataframe(
+                        _mr_df.style.format(_mc_fmt),
+                        width="stretch",
+                        height=340,
+                    )
+
+                    st.markdown("#### Direct vs Contagion P&L (Top 20 Holdings)")
+                    _wf_mc = _mr_df.head(20)
+                    _fig_mc_wf = go.Figure()
+                    if "pnl_direct" in _wf_mc.columns:
+                        _fig_mc_wf.add_trace(go.Bar(
+                            name="Direct P&L",
+                            x=_wf_mc["ticker"] if "ticker" in _wf_mc.columns else list(_wf_mc.index),
+                            y=_wf_mc["pnl_direct"].tolist(),
+                            marker_color="#3b82f6",
+                        ))
+                    if "pnl_total" in _wf_mc.columns:
+                        _fig_mc_wf.add_trace(go.Bar(
+                            name="Contagion (Total) P&L",
+                            x=_wf_mc["ticker"] if "ticker" in _wf_mc.columns else list(_wf_mc.index),
+                            y=_wf_mc["pnl_total"].tolist(),
+                            marker_color="#ef4444",
+                        ))
+                    _fig_mc_wf.update_layout(
+                        barmode="group",
+                        xaxis_tickangle=-30,
+                        yaxis_title="P&L ($)",
+                        height=430,
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                    )
+                    st.plotly_chart(_fig_mc_wf, width="stretch")
+
+                if _mr.warnings:
+                    with st.expander(
+                        f"ℹ️ {len(_mr.warnings)} warning(s)", expanded=False
+                    ):
+                        for _mw in _mr.warnings:
+                            st.warning(_mw)
+
+            # ── All-scenarios comparison ──────────────────────────────────────
+            if "macro_stress_all_results" in st.session_state:
+                _mc_all_res = st.session_state.macro_stress_all_results
+                _mc_cfg_stored = st.session_state.get("macro_stress_cfg", None)
+                _mc_pv_cmp = (
+                    _mc_cfg_stored.portfolio_value
+                    if _mc_cfg_stored is not None else 1_000_000.0
+                )
+
+                st.markdown("---")
+                st.subheader("Macro Scenario Comparison")
+
+                _mc_cmp_rows = []
+                for _sc_name, _mc_r in _mc_all_res.items():
+                    _mc_cmp_rows.append({
+                        "Scenario": _sc_name,
+                        "Direct P&L ($)": _mc_r.total_pnl_direct,
+                        "Direct P&L (%)": _mc_r.total_pnl_direct / _mc_pv_cmp * 100,
+                        "Contagion P&L ($)": _mc_r.total_pnl_total,
+                        "Contagion P&L (%)": _mc_r.total_pnl_total / _mc_pv_cmp * 100,
+                        "Cascade Risk": _mc_r.cascade_risk.upper(),
+                        "Spectral Radius": _mc_r.spectral_radius,
+                        "Warnings": len(_mc_r.warnings),
+                    })
+
+                _mc_cmp_df = pd.DataFrame(_mc_cmp_rows)
+                st.dataframe(
+                    _mc_cmp_df.style.format({
+                        "Direct P&L ($)": "${:,.0f}",
+                        "Direct P&L (%)": "{:+.2f}%",
+                        "Contagion P&L ($)": "${:,.0f}",
+                        "Contagion P&L (%)": "{:+.2f}%",
+                        "Spectral Radius": "{:.4f}",
+                    }).background_gradient(
+                        subset=["Contagion P&L ($)"], cmap="RdYlGn"
+                    ),
+                    width="stretch",
+                )
+
+                _fig_mc_cmp = go.Figure()
+                _fig_mc_cmp.add_trace(go.Bar(
+                    name="Direct P&L",
+                    x=_mc_cmp_df["Scenario"],
+                    y=_mc_cmp_df["Direct P&L ($)"],
+                    marker_color=[
+                        "#ef4444" if v < 0 else "#3b82f6"
+                        for v in _mc_cmp_df["Direct P&L ($)"]
+                    ],
+                ))
+                _fig_mc_cmp.add_trace(go.Bar(
+                    name="Contagion P&L",
+                    x=_mc_cmp_df["Scenario"],
+                    y=_mc_cmp_df["Contagion P&L ($)"],
+                    marker_color=[
+                        "#f97316" if v < 0 else "#22c55e"
+                        for v in _mc_cmp_df["Contagion P&L ($)"]
+                    ],
+                ))
+                _fig_mc_cmp.update_layout(
+                    barmode="group",
+                    xaxis_tickangle=-30,
+                    yaxis_title="P&L ($)",
+                    height=430,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                )
+                st.plotly_chart(_fig_mc_cmp, width="stretch")
 
 
 # ── Hedging Effectiveness During Stress Events ────────────────────────────────
