@@ -29,6 +29,7 @@ from src.risk.sector_beta import (
     SectorBetaConfig,
     SectorBetaResult,
     SectorBetaAnalyzer,
+    StockBetaResult,
 )
 from src.utils.logger import get_logger
 
@@ -255,6 +256,8 @@ class HoldingStressResult:
     # "neutral"    — change below ±0.5% threshold.
     beta_stability: str
     # "stable" | "unstable" | "unknown"
+    stock_beta: float = field(default=1.0)
+    sector_etf: str = field(default="unknown")
 
 
 @dataclass
@@ -286,7 +289,7 @@ class SectorStressResult:
                 "ticker", "sector", "weight",
                 "beta_implied_return", "copula_median_return", "copula_var_return",
                 "pnl_contribution_beta", "pnl_contribution_copula",
-                "role", "beta_stability",
+                "role", "beta_stability", "stock_beta", "sector_etf",
             ])
         rows = [
             {
@@ -300,6 +303,8 @@ class SectorStressResult:
                 "pnl_contribution_copula": h.pnl_contribution_copula,
                 "role": h.role,
                 "beta_stability": h.beta_stability,
+                "stock_beta": h.stock_beta,
+                "sector_etf": h.sector_etf,
             }
             for h in self.holdings_results
         ]
@@ -353,6 +358,7 @@ class SectorStressEngine:
         self._sector_map: dict[str, str] = {}
         self._fit_warnings: list[str] = []
         self._is_fitted: bool = False
+        self._stock_betas: Optional[StockBetaResult] = None
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public API
@@ -415,6 +421,23 @@ class SectorStressEngine:
             logger.info(
                 f"  [1/4] Beta: {len(self._beta_result.sectors)} sectors, "
                 f"{self._beta_result.n_unstable_pairs} unstable pairs"
+            )
+            # Compute individual stock betas to sector ETFs
+            from src.risk.sector_beta import StockBetaConfig
+            stock_beta_config = StockBetaConfig(
+                estimation_window_days=self._config.beta_config.long_window_days,
+                min_observations=52,
+                resample_frequency="W",
+                fallback_beta=1.0,
+            )
+            self._stock_betas = self._beta_analyzer.compute_stock_to_sector_betas(
+                returns=returns,
+                sector_map=self._sector_map,
+                config=stock_beta_config,
+            )
+            logger.info(
+                f"  Stock betas computed: {len(self._stock_betas.betas)} tickers, "
+                f"ETFs used: {set(e.sector_etf for e in self._stock_betas.betas.values())}"
             )
         except Exception as exc:
             msg = f"SectorBetaAnalyzer.compute() failed: {exc}"
@@ -578,8 +601,14 @@ class SectorStressEngine:
 
             ticker_sector = self._sector_map.get(ticker, "Unknown")
 
-            # Beta-implied return for this holding's sector
-            beta_ret = float(implied_sector_returns.get(ticker_sector, 0.0))
+            # FIXED: multiply sector shock by stock's individual beta to sector ETF
+            sector_return = float(implied_sector_returns.get(ticker_sector, 0.0))
+            stock_beta = (
+                self._stock_betas.get_beta(ticker)
+                if self._stock_betas is not None
+                else 1.0
+            )
+            beta_ret = stock_beta * sector_return
 
             # Copula returns for this sector
             if (
@@ -614,6 +643,12 @@ class SectorStressEngine:
                 pnl_contribution_copula=pnl_copula,
                 role=role,
                 beta_stability=beta_stability,
+                stock_beta=stock_beta,
+                sector_etf=(
+                    self._stock_betas.get_etf(ticker)
+                    if self._stock_betas is not None
+                    else "unknown"
+                ),
             ))
 
         total_beta_pnl = sum(h.pnl_contribution_beta for h in holdings_results)
@@ -986,7 +1021,7 @@ if __name__ == "__main__":
         "ticker", "sector", "weight",
         "beta_implied_return", "copula_median_return", "copula_var_return",
         "pnl_contribution_beta", "pnl_contribution_copula",
-        "role", "beta_stability",
+        "role", "beta_stability", "stock_beta", "sector_etf",
     ], "DataFrame columns mismatch"
     role_values = set(df["role"].unique())
     assert role_values <= {"shocked", "propagated", "hedged", "neutral"}, \

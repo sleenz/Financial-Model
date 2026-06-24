@@ -21,6 +21,38 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+# Sector ETF map — covers both TRBC labels (from LSEG) and GICS labels
+# (from yfinance fallback) since both may appear in sector_map.
+# IDX tickers (.JK suffix) use ^JKSE as market proxy — no IDX sector ETFs
+# available on yfinance. Flagged in StockBetaResult.source.
+SECTOR_ETF_MAP: dict[str, str] = {
+    # TRBC labels (primary — from LSEG)
+    "Technology":                    "XLK",
+    "Financials":                    "XLF",
+    "Energy":                        "XLE",
+    "Basic Materials":               "XLB",
+    "Industrials":                   "XLI",
+    "Consumer Cyclicals":            "XLY",
+    "Consumer Non-Cyclicals":        "XLP",
+    "Healthcare":                    "XLV",
+    "Telecommunication Services":    "XLC",
+    "Utilities":                     "XLU",
+    "Real Estate":                   "XLRE",
+    # GICS labels (from yfinance fallback)
+    "Information Technology":        "XLK",
+    "Financial Services":            "XLF",
+    "Consumer Defensive":            "XLP",
+    "Consumer Discretionary":        "XLY",
+    "Communication Services":        "XLC",
+    "Materials":                     "XLB",
+    # IDX market proxy — no sector ETFs available
+    "IDX_MARKET_PROXY":              "^JKSE",
+}
+
+IDX_TICKER_SUFFIX = ".JK"
+IDX_MARKET_PROXY_ETF = "^JKSE"
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Dataclasses
 # ──────────────────────────────────────────────────────────────────────────────
@@ -64,6 +96,47 @@ class SectorBetaResult:
     n_unstable_pairs: int
     config: SectorBetaConfig
     computation_date: str                # ISO format date string
+
+
+@dataclass
+class StockBetaConfig:
+    estimation_window_days: int = field(default=756)   # 3Y
+    min_observations: int = field(default=52)           # 1Y weekly minimum
+    resample_frequency: str = field(default="W")        # weekly returns
+    etf_map: dict = field(default_factory=lambda: SECTOR_ETF_MAP)
+    fallback_beta: float = field(default=1.0)
+    fallback_r2_threshold: float = field(default=0.05)
+    # Log a warning if R² < this (beta is unreliable but still used)
+    cache_ttl_seconds: int = field(default=86400)
+
+
+@dataclass
+class StockBetaEntry:
+    ticker: str
+    beta: float
+    r_squared: Optional[float]
+    sector_etf: str        # "XLF", "^JKSE", etc.
+    source: str            # "estimated" | "default" | "insufficient_data" | "idx_market_proxy"
+    n_observations: int
+    warning: str           # empty string if no issue
+
+
+@dataclass
+class StockBetaResult:
+    betas: dict[str, StockBetaEntry]   # keyed by ticker
+    config: StockBetaConfig
+    computation_date: str
+
+    def get_beta(self, ticker: str) -> float:
+        """Return beta for ticker, or config.fallback_beta if not found."""
+        if ticker in self.betas:
+            return self.betas[ticker].beta
+        return self.config.fallback_beta
+
+    def get_etf(self, ticker: str) -> str:
+        if ticker in self.betas:
+            return self.betas[ticker].sector_etf
+        return "unknown"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -465,6 +538,180 @@ class SectorBetaAnalyzer:
 
         df = pd.DataFrame(rows).sort_values("Divergence", ascending=False).reset_index(drop=True)
         return df
+
+    def compute_stock_to_sector_betas(
+        self,
+        returns: pd.DataFrame,
+        sector_map: dict[str, str],
+        config: StockBetaConfig = None,
+    ) -> StockBetaResult:
+        """
+        Estimate each stock's beta to its sector ETF via OLS regression.
+
+        For non-IDX tickers: regress weekly stock return on weekly ETF return.
+        For IDX tickers (suffix .JK): use ^JKSE as benchmark — no sector ETFs
+        available. Flagged in StockBetaEntry.source = "idx_market_proxy".
+
+        Parameters
+        ----------
+        returns : pd.DataFrame
+            Daily or higher-frequency price returns. Columns = ticker strings.
+        sector_map : dict[str, str]
+            {ticker: sector_name}. Sector names must match SECTOR_ETF_MAP keys
+            (already normalized by LSEGSectorFetcher.normalize_sector_label).
+        config : StockBetaConfig, optional
+            Defaults to StockBetaConfig().
+
+        Returns
+        -------
+        StockBetaResult
+            Beta for every ticker in returns.columns.
+            Tickers not in sector_map get fallback_beta with source="default".
+
+        Notes
+        -----
+        OLS formula: stock_weekly_return = alpha + beta * etf_weekly_return
+        beta = cov(stock, etf) / var(etf)  — equivalent to OLS coefficient.
+
+        Uses scipy.stats.linregress (already in stack) rather than statsmodels
+        to avoid a heavy import for a simple single-variable OLS.
+        Falls back to cov/var formula if scipy unavailable.
+        """
+        cfg = config or StockBetaConfig()
+        betas: dict[str, StockBetaEntry] = {}
+
+        # Resample to weekly returns once — do not repeat per ticker
+        weekly_returns = (
+            returns.resample(cfg.resample_frequency).last()
+                   .pct_change()
+                   .dropna(how="all")
+                   .iloc[-cfg.estimation_window_days // 5:]
+        )
+
+        # Cache of already-fetched ETF return series {etf_ticker: pd.Series}
+        etf_cache: dict[str, pd.Series] = {}
+
+        for ticker in returns.columns:
+            sector = sector_map.get(ticker)
+
+            # Determine which ETF/proxy to use
+            is_idx = ticker.endswith(IDX_TICKER_SUFFIX)
+            if is_idx:
+                etf_ticker = IDX_MARKET_PROXY_ETF
+                source_tag = "idx_market_proxy"
+            elif sector and sector in cfg.etf_map:
+                etf_ticker = cfg.etf_map[sector]
+                source_tag = "estimated"
+            else:
+                betas[ticker] = StockBetaEntry(
+                    ticker=ticker,
+                    beta=cfg.fallback_beta,
+                    r_squared=None,
+                    sector_etf="none",
+                    source="default",
+                    n_observations=0,
+                    warning=f"Sector '{sector}' not in ETF map — using default beta",
+                )
+                logger.warning(
+                    f"compute_stock_to_sector_betas: {ticker} sector "
+                    f"'{sector}' not in SECTOR_ETF_MAP — fallback beta=1.0"
+                )
+                continue
+
+            # Fetch ETF returns (cached within this call)
+            if etf_ticker not in etf_cache:
+                try:
+                    import yfinance as yf
+                    etf_raw = yf.download(
+                        etf_ticker, period="5y", interval="1wk",
+                        progress=False, auto_adjust=True,
+                    )["Close"].pct_change().dropna()
+                    etf_cache[etf_ticker] = etf_raw
+                except Exception as e:
+                    logger.error(
+                        f"compute_stock_to_sector_betas: failed to fetch "
+                        f"{etf_ticker}: {e}"
+                    )
+                    etf_cache[etf_ticker] = pd.Series(dtype=float)
+
+            etf_series = etf_cache[etf_ticker]
+
+            if etf_series.empty:
+                betas[ticker] = StockBetaEntry(
+                    ticker=ticker,
+                    beta=cfg.fallback_beta,
+                    r_squared=None,
+                    sector_etf=etf_ticker,
+                    source="fetch_failed",
+                    n_observations=0,
+                    warning=f"ETF {etf_ticker} fetch failed — using default beta",
+                )
+                continue
+
+            # Align stock and ETF weekly returns
+            stock_series = weekly_returns[ticker].dropna() if ticker in weekly_returns.columns else pd.Series(dtype=float)
+            aligned = pd.concat(
+                [stock_series.rename("stock"), etf_series.rename("etf")],
+                axis=1,
+            ).dropna()
+
+            if len(aligned) < cfg.min_observations:
+                betas[ticker] = StockBetaEntry(
+                    ticker=ticker,
+                    beta=cfg.fallback_beta,
+                    r_squared=None,
+                    sector_etf=etf_ticker,
+                    source="insufficient_data",
+                    n_observations=len(aligned),
+                    warning=(
+                        f"Only {len(aligned)} observations — need "
+                        f"{cfg.min_observations} — using default beta"
+                    ),
+                )
+                continue
+
+            # OLS via scipy linregress (single-variable, no overhead)
+            try:
+                from scipy import stats as scipy_stats
+                slope, _intercept, r_value, _p_value, _std_err = scipy_stats.linregress(
+                    aligned["etf"].values,
+                    aligned["stock"].values,
+                )
+                beta_val = float(slope)
+                r_sq: Optional[float] = float(r_value ** 2)
+            except ImportError:
+                # Fallback: direct cov/var formula
+                cov = aligned["stock"].cov(aligned["etf"])
+                var = aligned["etf"].var()
+                beta_val = cov / var if var > 1e-10 else cfg.fallback_beta
+                r_sq = None
+
+            warning = ""
+            if r_sq is not None and r_sq < cfg.fallback_r2_threshold:
+                warning = (
+                    f"Low R²={r_sq:.3f} — beta unreliable, "
+                    f"consider using default"
+                )
+                logger.warning(
+                    f"compute_stock_to_sector_betas: {ticker} R²={r_sq:.3f} "
+                    f"below threshold {cfg.fallback_r2_threshold}"
+                )
+
+            betas[ticker] = StockBetaEntry(
+                ticker=ticker,
+                beta=beta_val,
+                r_squared=r_sq,
+                sector_etf=etf_ticker,
+                source=source_tag,
+                n_observations=len(aligned),
+                warning=warning,
+            )
+
+        return StockBetaResult(
+            betas=betas,
+            config=cfg,
+            computation_date=pd.Timestamp.now().isoformat(),
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
