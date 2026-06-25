@@ -29,7 +29,10 @@ from src.risk.sector_beta import (
     SectorBetaConfig,
     SectorBetaResult,
     SectorBetaAnalyzer,
+)
+from src.risk.stock_sector_beta import (
     StockBetaResult,
+    compute_all_stock_betas,
 )
 from src.utils.logger import get_logger
 
@@ -445,39 +448,46 @@ class SectorStressEngine:
 
         sr = self._sector_returns
 
-        # ── Step 1b: Per-stock betas vs sector return series ──────────────────
-        # Isolated in its own try/except so a failure here never kills steps 2-4.
+        # ── Step 1b: Per-stock sector-relative betas (ETF OLS with circularity fix)
+        # Isolated in its own try/except so a failure never kills steps 2-4.
         try:
             import traceback as _tb
+            _start = (
+                str(returns.index[0].date())
+                if hasattr(returns.index[0], "date")
+                else str(returns.index[0])
+            )
+            _end = (
+                str(returns.index[-1].date())
+                if hasattr(returns.index[-1], "date")
+                else str(returns.index[-1])
+            )
             logger.debug(
-                f"  [1b] compute_stock_betas_vs_portfolio_sectors: "
+                f"  [1b] compute_all_stock_betas: "
                 f"tickers={list(returns.columns)}, "
-                f"sector_returns_cols={list(self._sector_returns.columns)}, "
+                f"date_range={_start}→{_end}, "
                 f"sector_map={self._sector_map}"
             )
-            self._stock_betas = self._beta_analyzer.compute_stock_betas_vs_portfolio_sectors(
-                returns=returns,
-                sector_returns=self._sector_returns,
+            self._stock_betas = compute_all_stock_betas(
+                tickers=list(returns.columns),
                 sector_map=self._sector_map,
+                stock_returns=returns,
+                start_date=_start,
+                end_date=_end,
                 min_observations=self._config.beta_config.min_observations,
             )
-            _estimated = sum(
-                1 for e in self._stock_betas.betas.values()
-                if e.source == "portfolio_sector"
+            _etf_estimated = sum(
+                1 for e in self._stock_betas.entries.values()
+                if e.source in ("sector_etf", "etf_ex_stock", "market_proxy")
             )
             logger.info(
-                f"  [1b] Stock betas: {len(self._stock_betas.betas)} tickers, "
-                f"{_estimated} estimated from portfolio sector returns"
+                f"  [1b] Stock betas: {len(self._stock_betas.entries)} tickers, "
+                f"{_etf_estimated} estimated from sector ETFs, "
+                f"{self._stock_betas.n_fallbacks} fallbacks"
             )
-            for _t, _e in self._stock_betas.betas.items():
-                logger.debug(
-                    f"       {_t}: beta={_e.beta:.4f}  R²={_e.r_squared}  "
-                    f"sector={_e.sector_etf}  source={_e.source}  "
-                    f"n={_e.n_observations}  warn={_e.warning!r}"
-                )
         except Exception as _exc:
             _trace = _tb.format_exc()
-            msg = f"compute_stock_betas_vs_portfolio_sectors() failed — all betas default to 1.0: {_exc}"
+            msg = f"compute_all_stock_betas() failed — all betas default to 1.0: {_exc}"
             logger.error(f"{msg}\n{_trace}")
             self._fit_warnings.append(msg)
 
@@ -578,7 +588,13 @@ class SectorStressEngine:
         regime_label, regime_prob = self._get_current_regime()
 
         # ── Resolve scenario shocks against fitted sectors ────────────────────
-        sectors = self._beta_result.sectors if self._beta_result else []
+        # When sector-to-sector OLS succeeded, use its sector list; otherwise
+        # fall back to unique sectors from the holdings map so per-stock betas
+        # still get a valid implied return even if contagion estimation failed.
+        if self._beta_result is not None:
+            sectors = self._beta_result.sectors
+        else:
+            sectors = list(set(self._sector_map.values()))
         matched_shocks: dict[str, float] = {
             sec: shock
             for sec, shock in scenario.shocked_sectors.items()
@@ -620,14 +636,25 @@ class SectorStressEngine:
 
             ticker_sector = self._sector_map.get(ticker, "Unknown")
 
-            # FIXED: multiply sector shock by stock's individual beta to sector ETF
             sector_return = float(implied_sector_returns.get(ticker_sector, 0.0))
-            stock_beta = (
-                self._stock_betas.get_beta(ticker)
+            _entry = (
+                self._stock_betas.entries.get(ticker)
                 if self._stock_betas is not None
-                else 1.0
+                else None
             )
+            if _entry is None:
+                logger.warning(f"[STRESS] {ticker}: no beta entry found, using 1.0 fallback")
+                stock_beta = 1.0
+            else:
+                stock_beta = _entry.beta
+                if _entry.source == "fallback":
+                    logger.warning(f"[STRESS] {ticker}: using fallback beta=1.0")
             beta_ret = stock_beta * sector_return
+            logger.debug(
+                f"[STRESS] {ticker}: sector_shock={sector_return:.4f}, "
+                f"beta={stock_beta:.4f}, implied_return={beta_ret:.4f}, "
+                f"source={_entry.source if _entry else 'none'}"
+            )
 
             # Copula returns for this sector
             if (
@@ -663,11 +690,7 @@ class SectorStressEngine:
                 role=role,
                 beta_stability=beta_stability,
                 stock_beta=stock_beta,
-                sector_etf=(
-                    self._stock_betas.get_etf(ticker)
-                    if self._stock_betas is not None
-                    else "unknown"
-                ),
+                sector_etf=(_entry.etf_proxy if _entry is not None else "unknown"),
             ))
 
         total_beta_pnl = sum(h.pnl_contribution_beta for h in holdings_results)
@@ -898,7 +921,8 @@ class SectorStressEngine:
         Returns an empty Series if beta_result is unavailable.
         """
         if self._beta_result is None:
-            return pd.Series(dtype=float)
+            # No contagion matrix — use the direct sector shocks as implied returns.
+            return pd.Series(matched_shocks) if matched_shocks else pd.Series(dtype=float)
 
         if not matched_shocks:
             return pd.Series(0.0, index=self._beta_result.sectors)

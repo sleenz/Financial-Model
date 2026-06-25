@@ -700,30 +700,30 @@ with tab4:
                 height=340,
             )
             st.caption(
-                "Stock Beta = OLS beta of each stock vs its sector's equal-weighted return series "
-                "(estimated from portfolio history, no external data). "
+                "Stock Beta = OLS beta of each stock vs its sector ETF (e.g. XLK for Technology). "
+                "Dominant holdings (ETF weight > 10%) use ETF-ex-stock returns to remove circular bias. "
                 "beta_implied_return = sector_shock × stock_beta. "
-                "Sector ETF column shows the benchmark sector name used for estimation."
+                "Sector ETF column shows the ETF used as benchmark."
             )
             if hasattr(_engine, "_stock_betas") and _engine._stock_betas is not None:
                 _idx_tickers = [
-                    t for t, e in _engine._stock_betas.betas.items()
-                    if e.source == "idx_market_proxy"
+                    t for t, e in _engine._stock_betas.entries.items()
+                    if e.source == "market_proxy"
                 ]
                 if _idx_tickers:
                     st.warning(
-                        f"⚠️ IDX tickers {_idx_tickers}: beta estimated vs JCI (^JKSE), "
+                        f"⚠️ IDX tickers {_idx_tickers}: beta estimated vs ^JKSE, "
                         f"not a sector ETF. Less precise than US sector ETF betas."
                     )
                 _low_r2_tickers = [
                     f"{t} (R²={e.r_squared:.2f})"
-                    for t, e in _engine._stock_betas.betas.items()
-                    if e.r_squared is not None and e.r_squared < 0.05
+                    for t, e in _engine._stock_betas.entries.items()
+                    if e.r_squared is not None and e.r_squared < 0.10
                 ]
                 if _low_r2_tickers:
                     st.warning(
-                        f"⚠️ Low R² betas (unreliable): {', '.join(_low_r2_tickers)}. "
-                        f"Defaulting to beta=1.0 recommended for these."
+                        f"⚠️ Low R² betas (< 0.10): {', '.join(_low_r2_tickers)}. "
+                        f"Sector ETF explains < 10% of this stock's variance."
                     )
 
             # Most exposed / natural hedges
