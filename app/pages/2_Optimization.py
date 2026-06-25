@@ -170,7 +170,7 @@ with st.expander("🔒 Position Reduction Constraint", expanded=False):
                 })
             st.dataframe(
                 pd.DataFrame(preview_rows).set_index("Ticker"),
-                use_container_width=True
+                width='stretch'
             )
             st.caption(
                 "Min = lowest weight optimizer can assign. "
@@ -181,12 +181,12 @@ with st.expander("🔒 Position Reduction Constraint", expanded=False):
             lbs = [
                 0.0 if allow_full_exit
                 else max(0.0, w * (1 - reduction_pct))
-                for w in current_w.values()
+                for w in current_w
             ]
             ubs = [
                 min(st.session_state.settings.get("max_weight", 0.40),
                     w * (1 + increase_pct))
-                for w in current_w.values()
+                for w in current_w
             ]
             sum_lower = sum(lbs)
             sum_upper = sum(ubs)
