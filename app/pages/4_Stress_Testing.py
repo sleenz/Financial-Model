@@ -700,9 +700,10 @@ with tab4:
                 height=340,
             )
             st.caption(
-                "Stock Beta = individual stock's sensitivity to its sector ETF "
-                "(XLF, XLP etc). beta_implied_return = sector_shock × stock_beta. "
-                "IDX tickers (.JK) use ^JKSE as market proxy — no IDX sector ETFs available."
+                "Stock Beta = OLS beta of each stock vs its sector's equal-weighted return series "
+                "(estimated from portfolio history, no external data). "
+                "beta_implied_return = sector_shock × stock_beta. "
+                "Sector ETF column shows the benchmark sector name used for estimation."
             )
             if hasattr(_engine, "_stock_betas") and _engine._stock_betas is not None:
                 _idx_tickers = [

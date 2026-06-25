@@ -422,22 +422,17 @@ class SectorStressEngine:
                 f"  [1/4] Beta: {len(self._beta_result.sectors)} sectors, "
                 f"{self._beta_result.n_unstable_pairs} unstable pairs"
             )
-            # Compute individual stock betas to sector ETFs
-            from src.risk.sector_beta import StockBetaConfig
-            stock_beta_config = StockBetaConfig(
-                estimation_window_days=self._config.beta_config.long_window_days,
-                min_observations=52,
-                resample_frequency="W",
-                fallback_beta=1.0,
-            )
-            self._stock_betas = self._beta_analyzer.compute_stock_to_sector_betas(
+            # Compute individual stock betas vs their portfolio sector return series.
+            # Uses data already in memory — no external downloads.
+            self._stock_betas = self._beta_analyzer.compute_stock_betas_vs_portfolio_sectors(
                 returns=returns,
+                sector_returns=self._sector_returns,
                 sector_map=self._sector_map,
-                config=stock_beta_config,
+                min_observations=self._config.beta_config.min_observations,
             )
             logger.info(
-                f"  Stock betas computed: {len(self._stock_betas.betas)} tickers, "
-                f"ETFs used: {set(e.sector_etf for e in self._stock_betas.betas.values())}"
+                f"  Stock betas computed: {len(self._stock_betas.betas)} tickers "
+                f"({sum(1 for e in self._stock_betas.betas.values() if e.source == 'portfolio_sector')} estimated)"
             )
         except Exception as exc:
             msg = f"SectorBetaAnalyzer.compute() failed: {exc}"
