@@ -749,82 +749,121 @@ class SectorBetaAnalyzer:
             source="portfolio_sector" for estimated betas; sector_etf field
             holds the sector name used as benchmark.
         """
+        import traceback as _traceback_mod
+        logger.debug(
+            f"compute_stock_betas_vs_portfolio_sectors: start — "
+            f"tickers={list(returns.columns)}, "
+            f"sector_cols={list(sector_returns.columns)}, "
+            f"min_obs={min_observations}"
+        )
+
+        logger.debug("  step: instantiating StockBetaConfig")
         cfg = StockBetaConfig()
-        betas: dict[str, StockBetaEntry] = {}
+        logger.debug(f"  StockBetaConfig OK: fallback_beta={cfg.fallback_beta}, r2_threshold={cfg.fallback_r2_threshold}")
+
+        betas = {}
 
         for ticker in returns.columns:
-            sector = sector_map.get(ticker)
+            try:
+                logger.debug(f"  ticker={ticker!r}: looking up sector")
+                sector = sector_map.get(ticker)
+                logger.debug(f"  ticker={ticker!r}: sector={sector!r}")
 
-            if not sector or sector not in sector_returns.columns:
+                if not sector or sector not in sector_returns.columns:
+                    logger.debug(f"  ticker={ticker!r}: no matching sector column — fallback")
+                    betas[ticker] = StockBetaEntry(
+                        ticker=ticker,
+                        beta=cfg.fallback_beta,
+                        r_squared=None,
+                        sector_etf=sector or "unknown",
+                        source="default",
+                        n_observations=0,
+                        warning=f"Sector '{sector}' not in sector returns — using default beta",
+                    )
+                    continue
+
+                logger.debug(f"  ticker={ticker!r}: building aligned series")
+                stock_ser = returns[ticker].dropna()
+                sector_ser = sector_returns[sector].dropna()
+                aligned = pd.concat(
+                    [stock_ser.rename("stock"), sector_ser.rename("sector")],
+                    axis=1,
+                ).dropna()
+                logger.debug(f"  ticker={ticker!r}: aligned n={len(aligned)}")
+
+                if len(aligned) < min_observations:
+                    betas[ticker] = StockBetaEntry(
+                        ticker=ticker,
+                        beta=cfg.fallback_beta,
+                        r_squared=None,
+                        sector_etf=sector,
+                        source="insufficient_data",
+                        n_observations=len(aligned),
+                        warning=(
+                            f"Only {len(aligned)} observations — need "
+                            f"{min_observations} — using default beta"
+                        ),
+                    )
+                    continue
+
+                logger.debug(f"  ticker={ticker!r}: computing var/cov/beta")
+                var = float(aligned["sector"].var())
+                if var < 1e-10:
+                    betas[ticker] = StockBetaEntry(
+                        ticker=ticker,
+                        beta=cfg.fallback_beta,
+                        r_squared=None,
+                        sector_etf=sector,
+                        source="zero_variance",
+                        n_observations=len(aligned),
+                        warning="Sector return variance near zero — using default beta",
+                    )
+                    continue
+
+                beta_val = float(aligned["stock"].cov(aligned["sector"])) / var
+                corr = float(aligned["stock"].corr(aligned["sector"]))
+                r_sq = float(corr ** 2) if not np.isnan(corr) else None
+                logger.debug(f"  ticker={ticker!r}: beta={beta_val:.4f}  r_sq={r_sq}")
+
+                warning = ""
+                if r_sq is not None and r_sq < cfg.fallback_r2_threshold:
+                    warning = f"Low R²={r_sq:.3f} — sector explains little of this stock's variance"
+
+                logger.debug(f"  ticker={ticker!r}: constructing StockBetaEntry")
                 betas[ticker] = StockBetaEntry(
                     ticker=ticker,
-                    beta=cfg.fallback_beta,
+                    beta=beta_val,
+                    r_squared=r_sq,
+                    sector_etf=sector,
+                    source="portfolio_sector",
+                    n_observations=len(aligned),
+                    warning=warning,
+                )
+                logger.debug(f"  ticker={ticker!r}: done beta={beta_val:.4f}")
+
+            except Exception as _e:
+                logger.error(
+                    f"compute_stock_betas_vs_portfolio_sectors: FAILED on ticker={ticker!r} "
+                    f"sector={sector_map.get(ticker)!r}: {_e}\n{_traceback_mod.format_exc()}"
+                )
+                betas[ticker] = StockBetaEntry(
+                    ticker=ticker,
+                    beta=1.0,
                     r_squared=None,
-                    sector_etf=sector or "unknown",
-                    source="default",
+                    sector_etf="error",
+                    source="error",
                     n_observations=0,
-                    warning=f"Sector '{sector}' not in sector returns — using default beta",
+                    warning=f"Exception during beta estimation: {_e}",
                 )
-                continue
 
-            stock_ser = returns[ticker].dropna()
-            sector_ser = sector_returns[sector].dropna()
-            aligned = pd.concat(
-                [stock_ser.rename("stock"), sector_ser.rename("sector")],
-                axis=1,
-            ).dropna()
-
-            if len(aligned) < min_observations:
-                betas[ticker] = StockBetaEntry(
-                    ticker=ticker,
-                    beta=cfg.fallback_beta,
-                    r_squared=None,
-                    sector_etf=sector,
-                    source="insufficient_data",
-                    n_observations=len(aligned),
-                    warning=(
-                        f"Only {len(aligned)} observations — need "
-                        f"{min_observations} — using default beta"
-                    ),
-                )
-                continue
-
-            var = float(aligned["sector"].var())
-            if var < 1e-10:
-                betas[ticker] = StockBetaEntry(
-                    ticker=ticker,
-                    beta=cfg.fallback_beta,
-                    r_squared=None,
-                    sector_etf=sector,
-                    source="zero_variance",
-                    n_observations=len(aligned),
-                    warning="Sector return variance near zero — using default beta",
-                )
-                continue
-
-            beta_val = float(aligned["stock"].cov(aligned["sector"])) / var
-            corr = aligned["stock"].corr(aligned["sector"])
-            r_sq: Optional[float] = float(corr ** 2) if not np.isnan(corr) else None
-
-            warning = ""
-            if r_sq is not None and r_sq < cfg.fallback_r2_threshold:
-                warning = f"Low R²={r_sq:.3f} — sector explains little of this stock's variance"
-
-            betas[ticker] = StockBetaEntry(
-                ticker=ticker,
-                beta=beta_val,
-                r_squared=r_sq,
-                sector_etf=sector,
-                source="portfolio_sector",
-                n_observations=len(aligned),
-                warning=warning,
-            )
-
-        return StockBetaResult(
+        logger.debug("  step: constructing StockBetaResult")
+        result = StockBetaResult(
             betas=betas,
             config=cfg,
             computation_date=pd.Timestamp.now().isoformat(),
         )
+        logger.debug(f"compute_stock_betas_vs_portfolio_sectors: done — {len(betas)} entries")
+        return result
 
 
 # ──────────────────────────────────────────────────────────────────────────────

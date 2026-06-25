@@ -422,18 +422,6 @@ class SectorStressEngine:
                 f"  [1/4] Beta: {len(self._beta_result.sectors)} sectors, "
                 f"{self._beta_result.n_unstable_pairs} unstable pairs"
             )
-            # Compute individual stock betas vs their portfolio sector return series.
-            # Uses data already in memory — no external downloads.
-            self._stock_betas = self._beta_analyzer.compute_stock_betas_vs_portfolio_sectors(
-                returns=returns,
-                sector_returns=self._sector_returns,
-                sector_map=self._sector_map,
-                min_observations=self._config.beta_config.min_observations,
-            )
-            logger.info(
-                f"  Stock betas computed: {len(self._stock_betas.betas)} tickers "
-                f"({sum(1 for e in self._stock_betas.betas.values() if e.source == 'portfolio_sector')} estimated)"
-            )
         except Exception as exc:
             msg = f"SectorBetaAnalyzer.compute() failed: {exc}"
             logger.error(msg)
@@ -456,6 +444,42 @@ class SectorStressEngine:
             return self
 
         sr = self._sector_returns
+
+        # ── Step 1b: Per-stock betas vs sector return series ──────────────────
+        # Isolated in its own try/except so a failure here never kills steps 2-4.
+        try:
+            import traceback as _tb
+            logger.debug(
+                f"  [1b] compute_stock_betas_vs_portfolio_sectors: "
+                f"tickers={list(returns.columns)}, "
+                f"sector_returns_cols={list(self._sector_returns.columns)}, "
+                f"sector_map={self._sector_map}"
+            )
+            self._stock_betas = self._beta_analyzer.compute_stock_betas_vs_portfolio_sectors(
+                returns=returns,
+                sector_returns=self._sector_returns,
+                sector_map=self._sector_map,
+                min_observations=self._config.beta_config.min_observations,
+            )
+            _estimated = sum(
+                1 for e in self._stock_betas.betas.values()
+                if e.source == "portfolio_sector"
+            )
+            logger.info(
+                f"  [1b] Stock betas: {len(self._stock_betas.betas)} tickers, "
+                f"{_estimated} estimated from portfolio sector returns"
+            )
+            for _t, _e in self._stock_betas.betas.items():
+                logger.debug(
+                    f"       {_t}: beta={_e.beta:.4f}  R²={_e.r_squared}  "
+                    f"sector={_e.sector_etf}  source={_e.source}  "
+                    f"n={_e.n_observations}  warn={_e.warning!r}"
+                )
+        except Exception as _exc:
+            _trace = _tb.format_exc()
+            msg = f"compute_stock_betas_vs_portfolio_sectors() failed — all betas default to 1.0: {_exc}"
+            logger.error(f"{msg}\n{_trace}")
+            self._fit_warnings.append(msg)
 
         # ── Step 2: DCC-GARCH ────────────────────────────────────────────────
         try:
