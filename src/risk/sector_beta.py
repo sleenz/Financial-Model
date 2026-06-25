@@ -713,6 +713,119 @@ class SectorBetaAnalyzer:
             computation_date=pd.Timestamp.now().isoformat(),
         )
 
+    def compute_stock_betas_vs_portfolio_sectors(
+        self,
+        returns: pd.DataFrame,
+        sector_returns: pd.DataFrame,
+        sector_map: dict[str, str],
+        min_observations: int = 60,
+    ) -> StockBetaResult:
+        """
+        Estimate each stock's beta to its own sector's return series.
+
+        Uses sector_returns already built by build_sector_returns() — no
+        external data download required. This is the primary stock-beta path
+        used by SectorStressEngine.fit().
+
+        OLS: beta_i = cov(stock_i, sector_i) / var(sector_i)
+        where sector_i is the equal-weighted (or value-weighted) sector return
+        series for the sector stock_i belongs to.
+
+        Parameters
+        ----------
+        returns : pd.DataFrame
+            Individual stock daily returns. Columns = ticker strings.
+        sector_returns : pd.DataFrame
+            Sector-level daily returns (output of build_sector_returns()).
+            Columns = sector names.
+        sector_map : dict[str, str]
+            {ticker: sector_name}.
+        min_observations : int
+            Minimum aligned rows required; below this falls back to 1.0.
+
+        Returns
+        -------
+        StockBetaResult
+            source="portfolio_sector" for estimated betas; sector_etf field
+            holds the sector name used as benchmark.
+        """
+        cfg = StockBetaConfig()
+        betas: dict[str, StockBetaEntry] = {}
+
+        for ticker in returns.columns:
+            sector = sector_map.get(ticker)
+
+            if not sector or sector not in sector_returns.columns:
+                betas[ticker] = StockBetaEntry(
+                    ticker=ticker,
+                    beta=cfg.fallback_beta,
+                    r_squared=None,
+                    sector_etf=sector or "unknown",
+                    source="default",
+                    n_observations=0,
+                    warning=f"Sector '{sector}' not in sector returns — using default beta",
+                )
+                continue
+
+            stock_ser = returns[ticker].dropna()
+            sector_ser = sector_returns[sector].dropna()
+            aligned = pd.concat(
+                [stock_ser.rename("stock"), sector_ser.rename("sector")],
+                axis=1,
+            ).dropna()
+
+            if len(aligned) < min_observations:
+                betas[ticker] = StockBetaEntry(
+                    ticker=ticker,
+                    beta=cfg.fallback_beta,
+                    r_squared=None,
+                    sector_etf=sector,
+                    source="insufficient_data",
+                    n_observations=len(aligned),
+                    warning=(
+                        f"Only {len(aligned)} observations — need "
+                        f"{min_observations} — using default beta"
+                    ),
+                )
+                continue
+
+            var = float(aligned["sector"].var())
+            if var < 1e-10:
+                betas[ticker] = StockBetaEntry(
+                    ticker=ticker,
+                    beta=cfg.fallback_beta,
+                    r_squared=None,
+                    sector_etf=sector,
+                    source="zero_variance",
+                    n_observations=len(aligned),
+                    warning="Sector return variance near zero — using default beta",
+                )
+                continue
+
+            beta_val = float(aligned["stock"].cov(aligned["sector"])) / var
+            corr = aligned["stock"].corr(aligned["sector"])
+            r_sq: Optional[float] = float(corr ** 2) if not np.isnan(corr) else None
+
+            warning = ""
+            if r_sq is not None and r_sq < cfg.fallback_r2_threshold:
+                warning = f"Low R²={r_sq:.3f} — sector explains little of this stock's variance"
+
+            betas[ticker] = StockBetaEntry(
+                ticker=ticker,
+                beta=beta_val,
+                r_squared=r_sq,
+                sector_etf=sector,
+                source="portfolio_sector",
+                n_observations=len(aligned),
+                warning=warning,
+            )
+
+        return StockBetaResult(
+            betas=betas,
+            config=cfg,
+            computation_date=pd.Timestamp.now().isoformat(),
+        )
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Smoke test
