@@ -5,6 +5,10 @@ Main entry point for the Streamlit application.
 """
 
 import streamlit as st
+import sys
+import os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+from src.utils.settings_manager import load_settings
 
 # Page configuration
 st.set_page_config(
@@ -132,6 +136,20 @@ if 'optimization_result' not in st.session_state:
     st.session_state.optimization_result = None
 if 'tickers' not in st.session_state:
     st.session_state.tickers = []
+
+if "settings" not in st.session_state:
+    saved = load_settings()
+    st.session_state.settings = {
+        "total_capital":       saved["portfolio"]["total_capital"],
+        "optimization_method": saved["optimization"]["method"],
+        "risk_free_rate":      saved["optimization"]["risk_free_rate"],
+        "max_weight":          saved["optimization"]["max_weight"],
+        "min_weight":          saved["optimization"]["min_weight"],
+        "target_volatility":   saved["optimization"]["target_volatility"],
+        "allow_fractional":    saved["optimization"]["allow_fractional"],
+    }
+    if saved["portfolio"]["tickers"] and "tickers" not in st.session_state:
+        st.session_state.tickers = saved["portfolio"]["tickers"]
 
 # Footer
 st.markdown("---")

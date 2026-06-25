@@ -35,6 +35,11 @@ class PortfolioConstraints:
         min_return: float = None,
         max_drawdown: float = None,
         long_only: bool = True,
+        turnover_enabled: bool = False,
+        reduction_pct: float = 0.50,
+        increase_pct: float = 0.30,
+        allow_full_exit: bool = True,
+        current_weights: Optional[Any] = None,
     ):
         """
         Initialize constraints.
@@ -51,6 +56,18 @@ class PortfolioConstraints:
             min_return: Minimum expected return
             max_drawdown: Maximum acceptable drawdown
             long_only: Whether to enforce long-only constraint
+            turnover_enabled: When True, each position is bounded within a trading band
+                around its current weight. When False (default), optimizer ignores
+                current_weights entirely and uses standard min/max bounds.
+            reduction_pct: Maximum allowed reduction from current weight (0.50 = 50%).
+                Range [0.0, 1.0]. 1.0 = can reduce to zero (same as allow_full_exit=True).
+            increase_pct: Maximum allowed increase from current weight (0.30 = 30%).
+                Range [0.0, inf). max_weight still applies as an upper cap.
+            allow_full_exit: If True, any position can be reduced to 0 regardless of
+                reduction_pct. Applies only when turnover_enabled=True.
+            current_weights: pd.Series with index=tickers, values=current decimal weights.
+                Required when turnover_enabled=True. If None with turnover_enabled=True,
+                optimizer logs a warning and falls back to standard bounds.
         """
         self.min_weight = min_weight
         self.max_weight = max_weight
@@ -63,6 +80,11 @@ class PortfolioConstraints:
         self.min_return = min_return
         self.max_drawdown = max_drawdown
         self.long_only = long_only
+        self.turnover_enabled = turnover_enabled
+        self.reduction_pct = reduction_pct
+        self.increase_pct = increase_pct
+        self.allow_full_exit = allow_full_exit
+        self.current_weights = current_weights
 
         # Validate constraints
         self._validate()
