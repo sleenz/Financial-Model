@@ -544,7 +544,8 @@ with _tab_h2:
         "Component VaR (daily %)": (_comp_var * 100).round(4),
         "% of Total VaR": ((_comp_var / _comp_var.sum()) * 100).round(2),
     }, index=returns.columns)
-    _fig_cvar2 = px.bar(_comp_var_df.reset_index(), x="index",
+    _comp_var_df.index.name = "Ticker"
+    _fig_cvar2 = px.bar(_comp_var_df.reset_index(), x="Ticker",
                          y="Component VaR (daily %)",
                          color="Component VaR (daily %)",
                          color_continuous_scale="Reds",
