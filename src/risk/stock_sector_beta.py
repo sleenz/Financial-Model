@@ -57,11 +57,11 @@ IDX_TICKER_SUFFIX = ".JK"
 IDX_MARKET_PROXY = "^JKSE"
 
 KNOWN_DOMINANT_WEIGHTS: dict[tuple[str, str], float] = {
-    ("NVDA", "XLK"): 0.24,
-    ("AAPL", "XLK"): 0.20,
-    ("MSFT", "XLK"): 0.18,
-    ("AMZN", "XLY"): 0.22,
-    ("TSLA", "XLY"): 0.16,
+    ("NVDA", "XLK"): 0.1307,
+    ("AAPL", "XLK"): 0.1167,
+    ("MSFT", "XLK"): 0.0852,
+    ("AMZN", "XLY"): 0.2756,
+    ("TSLA", "XLY"): 0.2004,
 }
 
 

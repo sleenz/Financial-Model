@@ -165,7 +165,7 @@ with col2:
 
 with col3:
     st.markdown("**Version**")
-    st.caption("1.0.0")
+    st.caption("2.3.1")
 
 
 def main():
