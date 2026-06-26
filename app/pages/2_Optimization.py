@@ -36,6 +36,7 @@ METHOD_MAP = {
     "Hierarchical Risk Parity (HRP)": "hrp",
     "Maximum Diversification": "max_diversification",
     "Equal Weight": "equal_weight",
+    "Black-Litterman": "black_litterman",
     "Custom / Current Holdings": "use_current",
 }
 
@@ -86,6 +87,107 @@ if method == "use_current":
             "add your positions, and click **Analyze My Portfolio** first."
         )
 
+# Black-Litterman configuration — built before the run button so _bl_views_data
+# is in scope when the button handler executes.
+_bl_tau: float = 0.05
+_bl_risk_aversion: float = 2.5
+_bl_views_data: list = []
+
+if method == "black_litterman":
+    _tickers_list = list(returns.columns)
+    with st.expander("Black-Litterman Configuration", expanded=True):
+        _blc1, _blc2 = st.columns(2)
+        with _blc1:
+            _bl_tau = st.slider(
+                "tau — prior uncertainty",
+                0.005, 0.100, 0.050, step=0.005, format="%.3f",
+                key="bl_tau",
+                help=(
+                    "Scalar that scales the uncertainty of the equilibrium prior. "
+                    "Lower tau = trust the market equilibrium more; "
+                    "higher tau = give more weight to investor views."
+                ),
+            )
+            _bl_risk_aversion = st.number_input(
+                "Risk aversion delta",
+                min_value=0.5, max_value=10.0, value=2.5, step=0.1,
+                format="%.1f", key="bl_risk_aversion",
+                help=(
+                    "Market-wide risk aversion coefficient used to back out implied "
+                    "equilibrium returns from market-cap weights. Typical range: 2–4."
+                ),
+            )
+        with _blc2:
+            st.caption(
+                "tau controls how strongly investor views pull the posterior returns "
+                "away from the market equilibrium. delta reverse-engineers the "
+                "equilibrium return vector: pi = delta * Sigma * w_market."
+            )
+
+        st.markdown("**Investor Views** (optional)")
+        st.caption(
+            "Absolute view: 'AAPL will return 15% per year.'  "
+            "Relative view: 'MSFT will outperform GOOG by 5% per year.'"
+        )
+
+        _n_views = int(st.number_input(
+            "Number of views", min_value=0, max_value=8, value=0, step=1,
+            key="bl_n_views",
+        ))
+
+        for _vi in range(_n_views):
+            st.markdown(f"---\n**View {_vi + 1}**")
+            _vtype = st.selectbox(
+                "Type", ["Absolute", "Relative"], key=f"bl_v{_vi}_type"
+            )
+            _vc1, _vc2, _vc3 = st.columns(3)
+            with _vc1:
+                if _vtype == "Absolute":
+                    _vasset = st.selectbox(
+                        "Asset", _tickers_list, key=f"bl_v{_vi}_asset"
+                    )
+                else:
+                    _vlong = st.multiselect(
+                        "Long assets", _tickers_list,
+                        default=[_tickers_list[0]] if _tickers_list else [],
+                        key=f"bl_v{_vi}_long",
+                    )
+                    _vshort = st.multiselect(
+                        "Short assets", _tickers_list,
+                        key=f"bl_v{_vi}_short",
+                    )
+            with _vc2:
+                _vlabel = "Expected return (%)" if _vtype == "Absolute" else "Outperformance (%)"
+                _vreturn = st.number_input(
+                    _vlabel, -50.0, 100.0, 10.0, step=0.5,
+                    key=f"bl_v{_vi}_return",
+                ) / 100.0
+            with _vc3:
+                _vconf = st.slider(
+                    "Confidence", 0.10, 0.90, 0.50, key=f"bl_v{_vi}_conf"
+                )
+
+            if _vtype == "Absolute":
+                _bl_views_data.append({
+                    "type": "absolute",
+                    "asset": _vasset,
+                    "return": _vreturn,
+                    "confidence": _vconf,
+                })
+            elif _vtype == "Relative":
+                _vlong_sel = locals().get("_vlong", [])
+                _vshort_sel = locals().get("_vshort", [])
+                if _vlong_sel and _vshort_sel:
+                    _bl_views_data.append({
+                        "type": "relative",
+                        "long": _vlong_sel,
+                        "short": _vshort_sel,
+                        "return": _vreturn,
+                        "confidence": _vconf,
+                    })
+                else:
+                    st.warning(f"View {_vi + 1}: select at least one long and one short asset.")
+
 # Run button
 _btn_label = "Analyze Portfolio" if method == "use_current" else "Run Optimization"
 if st.button(_btn_label, type="primary"):
@@ -122,6 +224,39 @@ if st.button(_btn_label, type="primary"):
                 'volatility': _vol,
                 'sharpe_ratio': _sharpe,
                 'method': 'use_current',
+            }
+            optimizer = None
+
+        elif method == "black_litterman":
+            from src.optimization.black_litterman import BlackLittermanModel
+            _bl_model = BlackLittermanModel(
+                returns=returns,
+                risk_aversion=float(st.session_state.get("bl_risk_aversion", 2.5)),
+                tau=float(st.session_state.get("bl_tau", 0.05)),
+                risk_free_rate=rf_rate,
+            )
+            for _view in _bl_views_data:
+                if _view["type"] == "absolute":
+                    _bl_model.add_absolute_view(
+                        _view["asset"], _view["return"], _view["confidence"]
+                    )
+                elif _view["type"] == "relative":
+                    _bl_model.add_relative_view(
+                        _view["long"], _view["short"],
+                        _view["return"], _view["confidence"],
+                    )
+            _bl_out = _bl_model.optimize(
+                max_weight=settings.get("max_weight", 1.0),
+                min_weight=settings.get("min_weight", 0.0),
+            )
+            result = {
+                "weights": _bl_out["weights"],
+                "expected_return": float(_bl_out["expected_return"]),
+                "volatility": float(_bl_out["volatility"]),
+                "sharpe_ratio": float(_bl_out["sharpe_ratio"]),
+                "method": "black_litterman",
+                "posterior_returns": _bl_out["posterior_returns"],
+                "equilibrium_returns": _bl_out["equilibrium_returns"],
             }
             optimizer = None
 
@@ -172,6 +307,35 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
         st.metric("Sharpe Ratio", f"{result['sharpe_ratio']:.3f}")
     with col4:
         st.metric("Positions", f"{(weights > 0.001).sum()}")
+
+    # Black-Litterman: posterior vs equilibrium returns
+    if result.get("method") == "black_litterman" and "posterior_returns" in result:
+        st.markdown("---")
+        st.subheader("Black-Litterman: Posterior vs Equilibrium Returns")
+        _bl_cmp_df = pd.DataFrame({
+            "Equilibrium (prior)": result["equilibrium_returns"] * 100,
+            "Posterior (views applied)": result["posterior_returns"] * 100,
+        })
+        _fig_bl = go.Figure()
+        _fig_bl.add_trace(go.Bar(
+            name="Equilibrium", x=_bl_cmp_df.index,
+            y=_bl_cmp_df["Equilibrium (prior)"], marker_color="steelblue",
+        ))
+        _fig_bl.add_trace(go.Bar(
+            name="Posterior", x=_bl_cmp_df.index,
+            y=_bl_cmp_df["Posterior (views applied)"], marker_color="coral",
+        ))
+        _fig_bl.update_layout(
+            barmode="group", yaxis_title="Expected Annual Return (%)",
+            xaxis_title="Asset", height=380,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        )
+        st.plotly_chart(_fig_bl, width="stretch")
+        st.caption(
+            "Equilibrium returns are derived from market-cap weights via reverse optimization "
+            "(pi = delta * Sigma * w_market). Posterior returns incorporate your investor views "
+            "via Bayesian updating. The optimizer then maximizes Sharpe using the posterior estimates."
+        )
 
     st.markdown("---")
 
@@ -364,8 +528,8 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
     st.markdown("---")
     st.subheader("Efficient Frontier")
 
-    if result.get('method') == 'use_current':
-        st.info("Efficient frontier is not available in Custom / Current Holdings mode.")
+    if result.get('method') in ('use_current', 'black_litterman'):
+        st.info("Efficient frontier is not available in this mode.")
     elif st.button("Calculate Efficient Frontier"):
         with st.spinner("Calculating frontier..."):
             optimizer = st.session_state.optimizer
@@ -421,8 +585,8 @@ if 'optimization_result' in st.session_state and st.session_state.optimization_r
     st.markdown("---")
     st.subheader("Method Comparison")
 
-    if result.get('method') == 'use_current':
-        st.info("Method comparison is not available in Custom / Current Holdings mode.")
+    if result.get('method') in ('use_current', 'black_litterman'):
+        st.info("Method comparison is not available in this mode.")
     elif st.button("Compare All Methods"):
         with st.spinner("Comparing methods..."):
             optimizer = st.session_state.optimizer
