@@ -195,5 +195,55 @@ def test_posterior_covariance_shape_and_psd():
     assert min_eig >= -1e-8, f"Posterior covariance is not PSD: min eigenvalue={min_eig:.6f}"
 
 
+# ---------------------------------------------------------------------------
+# Test 10 — posterior covariance inflates vol vs historical covariance
+# ---------------------------------------------------------------------------
+
+def test_posterior_cov_inflates_volatility():
+    """
+    Documents the discrepancy that caused the Sharpe mismatch with Risk Analytics.
+
+    BlackLittermanModel.optimize() reports volatility using posterior_cov = Sigma + M.
+    M is the posterior uncertainty matrix; it is always positive semi-definite, so
+    posterior_vol >= hist_vol for any non-zero view.
+
+    2_Optimization.py must therefore recompute expected_return / volatility /
+    sharpe_ratio from historical data AFTER getting BL weights, so the displayed
+    metrics match what Risk Analytics shows for the same weight vector.
+    """
+    returns = _make_returns()
+    model = BlackLittermanModel(returns, tau=0.05, risk_free_rate=0.02)
+    model.add_absolute_view("GOOG", view_return=0.30, confidence=0.8)
+    out = model.optimize(max_weight=0.5)
+
+    w = out["weights"].values
+    hist_cov = (returns.cov() * 252).values
+    post_cov = model.get_posterior_covariance().values
+
+    vol_hist = float(np.sqrt(w @ hist_cov @ w))
+    vol_post = float(np.sqrt(w @ post_cov @ w))
+
+    # posterior_cov = Sigma + M  =>  posterior_vol >= hist_vol
+    assert vol_post >= vol_hist - 1e-10, (
+        f"Posterior vol ({vol_post:.6f}) should be >= historical vol ({vol_hist:.6f})"
+    )
+    # They must differ when views are present (M != 0)
+    assert abs(vol_post - vol_hist) > 1e-6, (
+        "Posterior vol and historical vol should differ when views are present "
+        f"(post={vol_post:.6f}, hist={vol_hist:.6f})"
+    )
+
+    # The Sharpe reported by BL uses posterior vol (inflated denominator)
+    bl_sharpe = out["sharpe_ratio"]
+    hist_mean = (returns.mean() * 252).values
+    exp_ret = float(np.dot(w, hist_mean))
+    sharpe_hist = (exp_ret - 0.02) / vol_hist if vol_hist > 0 else 0.0
+
+    assert abs(bl_sharpe - sharpe_hist) > 0.001, (
+        f"BL sharpe ({bl_sharpe:.4f}) should differ from historical Sharpe "
+        f"({sharpe_hist:.4f}) — if equal, the test premise has changed."
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

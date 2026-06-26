@@ -250,11 +250,21 @@ if st.button(_btn_label, type="primary"):
                 max_weight=settings.get("max_weight", 1.0),
                 min_weight=settings.get("min_weight", 0.0),
             )
+            # Recompute metrics using historical data so they match Risk Analytics.
+            # BL.optimize() uses posterior_cov = Sigma + M for the optimisation
+            # objective, but posterior_cov > Sigma inflates volatility and
+            # depresses Sharpe vs what Risk Analytics would show for the same weights.
+            _bl_w = _bl_out["weights"].values
+            _hist_ret_ann = returns.mean() * 252
+            _hist_cov_ann = returns.cov() * 252
+            _bl_exp_ret = float(np.dot(_bl_w, _hist_ret_ann.values))
+            _bl_vol = float(np.sqrt(_bl_w @ _hist_cov_ann.values @ _bl_w))
+            _bl_sharpe = (_bl_exp_ret - rf_rate) / _bl_vol if _bl_vol > 0 else 0.0
             result = {
                 "weights": _bl_out["weights"],
-                "expected_return": float(_bl_out["expected_return"]),
-                "volatility": float(_bl_out["volatility"]),
-                "sharpe_ratio": float(_bl_out["sharpe_ratio"]),
+                "expected_return": _bl_exp_ret,
+                "volatility": _bl_vol,
+                "sharpe_ratio": _bl_sharpe,
                 "method": "black_litterman",
                 "posterior_returns": _bl_out["posterior_returns"],
                 "equilibrium_returns": _bl_out["equilibrium_returns"],
