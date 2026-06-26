@@ -63,7 +63,7 @@ st.markdown("---")
 
 # Tabs
 tab1, tab2, tab3, tab4 = st.tabs([
-    "Historical Scenarios", "Monte Carlo", "🔬 Sector Shock", "🌐 Macro Contagion"
+    "Historical Scenarios", "Monte-Carlo Simulation", "Sector Shock", "Macro Contagion Network"
 ])
 
 with tab1:
