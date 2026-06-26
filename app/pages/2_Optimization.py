@@ -192,12 +192,12 @@ with st.expander("🔒 Position Reduction Constraint", expanded=False):
             sum_upper = sum(ubs)
             if sum_lower > 1.0:
                 st.error(
-                    f"⚠️ Infeasible: minimum weights sum to {sum_lower:.1%} > 100%. "
+                    f"Infeasible: minimum weights sum to {sum_lower:.1%} > 100%. "
                     f"Increase the reduction percentage or enable 'Allow full exit'."
                 )
             elif sum_upper < 1.0:
                 st.error(
-                    f"⚠️ Infeasible: maximum weights sum to {sum_upper:.1%} < 100%. "
+                    f"Infeasible: maximum weights sum to {sum_upper:.1%} < 100%. "
                     f"Increase the increase percentage."
                 )
             else:
@@ -213,7 +213,7 @@ with st.expander("🔒 Position Reduction Constraint", expanded=False):
             )
 
 # Save optimization settings button
-if st.button("💾 Save Optimization Settings", key="save_settings_p2"):
+if st.button("Save Optimization Settings", key="save_settings_p2"):
     current = load_settings()
     current["optimization"].update({
         "method":            settings.get("optimization_method", "max_sharpe"),

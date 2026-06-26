@@ -52,7 +52,7 @@ with st.sidebar:
         default_tickers = ""
 
 # Time period selection (needed for both methods)
-st.subheader("⏰ Time Period for Analysis")
+st.subheader("Time Period for Analysis")
 col1, col2 = st.columns(2)
 
 with col1:
@@ -457,7 +457,7 @@ st.session_state.settings = {
     'target_volatility': target_volatility / 100 if target_volatility > 0 else None,
 }
 
-if st.button("💾 Save Settings", key="save_settings_p1"):
+if st.button("Save Settings", key="save_settings_p1"):
     current = load_settings()
     current["portfolio"]["total_capital"] = st.session_state.settings.get(
         "total_capital", current["portfolio"]["total_capital"]
