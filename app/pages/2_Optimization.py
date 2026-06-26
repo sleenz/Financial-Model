@@ -189,6 +189,153 @@ if method == "black_litterman":
                 else:
                     st.warning(f"View {_vi + 1}: select at least one long and one short asset.")
 
+# Turnover / position reduction constraint expander
+_saved_constraints = load_settings()
+
+with st.expander("🔒 Position Reduction Constraint", expanded=False):
+    st.caption(
+        "Limits how much each position can change from its current size. "
+        "Requires current holdings to be entered in Portfolio Input first."
+    )
+
+    turnover_enabled = st.toggle(
+        "Enable position reduction constraint",
+        value=st.session_state.get(
+            "turnover_enabled",
+            _saved_constraints["constraints"]["turnover_enabled"]
+        ),
+        help="When enabled, the optimizer cannot move any position "
+             "beyond the defined trading band."
+    )
+    st.session_state.turnover_enabled = turnover_enabled
+
+    if turnover_enabled:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            reduction_pct = st.slider(
+                "Max reduction from current position (%)",
+                min_value=0,
+                max_value=100,
+                value=int(st.session_state.get(
+                    "reduction_pct",
+                    _saved_constraints["constraints"]["reduction_pct"]
+                ) * 100),
+                step=5,
+                help="50% means a 100-share position can drop to minimum 50 shares."
+            ) / 100.0
+            st.session_state.reduction_pct = reduction_pct
+
+        with col2:
+            increase_pct = st.slider(
+                "Max increase from current position (%)",
+                min_value=0,
+                max_value=200,
+                value=int(st.session_state.get(
+                    "increase_pct",
+                    _saved_constraints["constraints"]["increase_pct"]
+                ) * 100),
+                step=5,
+                help="30% means a 20% position can grow to maximum 26%."
+            ) / 100.0
+            st.session_state.increase_pct = increase_pct
+
+        allow_full_exit = st.checkbox(
+            "Allow full exit (sell 100% of any position)",
+            value=st.session_state.get(
+                "allow_full_exit",
+                _saved_constraints["constraints"]["allow_full_exit"]
+            ),
+            help="When checked, positions can be sold entirely regardless "
+                 "of the reduction constraint."
+        )
+        st.session_state.allow_full_exit = allow_full_exit
+
+        if (
+            "current_portfolio_weights" in st.session_state
+            and st.session_state.current_portfolio_weights is not None
+        ):
+            current_w = st.session_state.current_portfolio_weights
+            preview_rows = []
+            for ticker, w in current_w.items():
+                lb = 0.0 if allow_full_exit else max(0.0, w * (1 - reduction_pct))
+                ub = min(
+                    st.session_state.settings.get("max_weight", 0.40),
+                    w * (1 + increase_pct)
+                )
+                preview_rows.append({
+                    "Ticker":      ticker,
+                    "Current (%)": f"{w:.1%}",
+                    "Min (%)":     f"{lb:.1%}",
+                    "Max (%)":     f"{ub:.1%}",
+                    "Band":        f"[{lb:.1%} – {ub:.1%}]",
+                })
+            st.dataframe(
+                pd.DataFrame(preview_rows).set_index("Ticker"),
+                width='stretch'
+            )
+            st.caption(
+                "Min = lowest weight optimizer can assign. "
+                "Max = highest weight optimizer can assign. "
+                "Stocks not in current portfolio use standard min/max bounds."
+            )
+
+            lbs = [
+                0.0 if allow_full_exit
+                else max(0.0, w * (1 - reduction_pct))
+                for w in current_w
+            ]
+            ubs = [
+                min(st.session_state.settings.get("max_weight", 0.40),
+                    w * (1 + increase_pct))
+                for w in current_w
+            ]
+            sum_lower = sum(lbs)
+            sum_upper = sum(ubs)
+            if sum_lower > 1.0:
+                st.error(
+                    f"Infeasible: minimum weights sum to {sum_lower:.1%} > 100%. "
+                    f"Increase the reduction percentage or enable 'Allow full exit'."
+                )
+            elif sum_upper < 1.0:
+                st.error(
+                    f"Infeasible: maximum weights sum to {sum_upper:.1%} < 100%. "
+                    f"Increase the increase percentage."
+                )
+            else:
+                st.success(
+                    f"✓ Constraints feasible — "
+                    f"weights will be bounded between "
+                    f"{sum_lower:.1%} and {sum_upper:.1%} total."
+                )
+        else:
+            st.info(
+                "Enter your current holdings in Portfolio Input first "
+                "to see the trading band preview."
+            )
+
+# Save optimization settings button
+if st.button("Save Optimization Settings", key="save_settings_p2"):
+    current = load_settings()
+    current["optimization"].update({
+        "method":            settings.get("optimization_method", "max_sharpe"),
+        "risk_free_rate":    settings.get("risk_free_rate", 0.05),
+        "max_weight":        settings.get("max_weight", 0.40),
+        "min_weight":        settings.get("min_weight", 0.02),
+        "target_volatility": settings.get("target_volatility", 0.15),
+        "allow_fractional":  settings.get("allow_fractional", False),
+    })
+    current["constraints"].update({
+        "turnover_enabled": st.session_state.get("turnover_enabled", False),
+        "reduction_pct":    st.session_state.get("reduction_pct", 0.50),
+        "increase_pct":     st.session_state.get("increase_pct", 0.30),
+        "allow_full_exit":  st.session_state.get("allow_full_exit", True),
+    })
+    if save_settings(current):
+        st.success("Optimization settings saved.")
+    else:
+        st.error("Failed to save settings.")
+
 # Run button
 _btn_label = "Analyze Portfolio" if method == "use_current" else "Run Optimization"
 if st.button(_btn_label, type="primary"):
