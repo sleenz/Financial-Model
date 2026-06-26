@@ -531,25 +531,3 @@ Pages 3-7 read from `portfolio_data` + `weights` + `optimization_result`. If any
 |---|---|---|
 | Low | `3_Risk_Analytics.py:243` | EWMA Volatility panel plots `rolling(20).std()` instead of the computed `ewma_vol` series. Cosmetic mislabel only. |
 | Low | `src/reports/charts.py` | Uses deprecated `pd.date_range(freq='M')` -- pandas 2.x requires `'ME'`. Causes ValueError in monthly returns heatmap chart. |
-
-### Action Items
-
-**Critical:**
-- Fix `freq='M'` → `'ME'` in `src/reports/charts.py` -- find all occurrences with `grep -n "freq='M'" src/reports/charts.py`
-- Ensure `reportlab` is installed before running the Reports page
-
-**High priority:**
-- Expose Black-Litterman in the UI -- `black_litterman.py` is complete but `2_Optimization.py` has no option for it. Add `"Black-Litterman": "black_litterman"` to `METHOD_MAP`.
-- Fix the EWMA mislabel -- `3_Risk_Analytics.py:243`: replace `rolling(20).std()` with `ewma_vol` already on line 238.
-
-**Medium priority:**
-- Remove unused heavy dependencies: `cvxpy`, `PyPortfolioOpt`, `riskfolio-lib`, `empyrical`, `quantstats` are in `requirements.txt` but never imported -- approximately 500 MB of unnecessary install overhead.
-- Consolidate the two HRP implementations: `src/optimization/hrp.py` duplicates code in `optimizers.py`.
-- Add centralized session state validation so pages give consistent "please load data first" behavior.
-- Add CLI entry point for `stock_valuer.py` with argparse.
-
-**Low priority:**
-- Plot the actual `ewma_vol` series (computed but discarded) alongside rolling vol.
-- Color the efficient frontier curve by Sharpe ratio.
-- Surface `data_quality_score` from `multi_factor_score()` in `print_report()` output.
-- Wire the `SectorStressEngine` fit status into Page 4 session state so re-running the page does not require re-fitting when sector map and config are unchanged.
