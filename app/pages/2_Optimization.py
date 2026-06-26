@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from src.optimization.optimizers import PortfolioOptimizer
 from src.optimization.constraints import PortfolioConstraints
 from src.portfolio.calculator import PositionCalculator
+from src.utils.settings_manager import load_settings, save_settings
 
 st.set_page_config(page_title="Optimization", page_icon=None, layout="wide")
 
@@ -59,14 +60,14 @@ with col1:
 with col2:
     capital = st.number_input(
         "Capital ($)",
-        value=settings.get('total_capital', 10000),
+        value=settings.get('total_capital', 100000),
         min_value=1000
     )
 
 with col3:
     rf_rate = st.number_input(
         "Risk-Free Rate",
-        value=settings.get('risk_free_rate', 0.02),
+        value=settings.get('risk_free_rate', 0.05),
         format="%.3f"
     )
 
@@ -263,13 +264,23 @@ if st.button(_btn_label, type="primary"):
         else:
             # Create constraints
             constraints = PortfolioConstraints(
-                max_weight=settings.get('max_weight', 0.4),
+                max_weight=settings.get('max_weight', 0.40),
+                min_weight=settings.get('min_weight', 0.0),
                 min_position_size=settings.get('min_weight', 0.0),
+                turnover_enabled=st.session_state.get("turnover_enabled", False),
+                reduction_pct=st.session_state.get("reduction_pct", 0.50),
+                increase_pct=st.session_state.get("increase_pct", 0.30),
+                allow_full_exit=st.session_state.get("allow_full_exit", True),
+                current_weights=st.session_state.get("current_portfolio_weights", None),
             )
 
             # Run optimizer
             optimizer = PortfolioOptimizer(returns, rf_rate)
-            result = optimizer.optimize(method, constraints)
+            try:
+                result = optimizer.optimize(method, constraints)
+            except ValueError as e:
+                st.error(f"Optimization failed — constraint error: {e}")
+                st.stop()
 
         # Store result and data for other pages
         st.session_state.optimization_result = result

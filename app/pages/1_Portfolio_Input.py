@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from src.data.data_manager import DataManager
 from src.utils.helpers import validate_tickers
 from src.portfolio.holdings import HoldingsTracker
+from src.utils.settings_manager import load_settings, save_settings
 
 st.set_page_config(page_title="Portfolio Input", page_icon=None, layout="wide")
 
@@ -51,7 +52,7 @@ with st.sidebar:
         default_tickers = ""
 
 # Time period selection (needed for both methods)
-st.subheader("⏰ Time Period for Analysis")
+st.subheader("Time Period for Analysis")
 col1, col2 = st.columns(2)
 
 with col1:
@@ -380,21 +381,25 @@ with col1:
         "Total Capital ($)",
         min_value=1000,
         max_value=100000000,
-        value=10000,
+        value=int(st.session_state.settings.get('total_capital', 100000)),
         step=1000,
         help="Total amount to invest"
     )
 
+    _p1_method_opts = [
+        "Maximum Sharpe Ratio",
+        "Minimum Volatility",
+        "Risk Parity",
+        "Hierarchical Risk Parity (HRP)",
+        "Maximum Diversification",
+        "Equal Weight",
+    ]
+    _saved_method = st.session_state.settings.get('optimization_method', "Maximum Sharpe Ratio")
+    _p1_method_idx = _p1_method_opts.index(_saved_method) if _saved_method in _p1_method_opts else 0
     optimization_method = st.selectbox(
         "Optimization Method",
-        [
-            "Maximum Sharpe Ratio",
-            "Minimum Volatility",
-            "Risk Parity",
-            "Hierarchical Risk Parity (HRP)",
-            "Maximum Diversification",
-            "Equal Weight"
-        ],
+        _p1_method_opts,
+        index=_p1_method_idx,
         help="Algorithm to use for portfolio optimization"
     )
 
@@ -402,7 +407,7 @@ with col1:
         "Risk-Free Rate (%)",
         min_value=0.0,
         max_value=10.0,
-        value=2.0,
+        value=float(st.session_state.settings.get('risk_free_rate', 0.05) * 100),
         step=0.1
     ) / 100
 
@@ -414,7 +419,7 @@ with col2:
             "Maximum Position Size (%)",
             min_value=5,
             max_value=100,
-            value=40,
+            value=int(st.session_state.settings.get('max_weight', 0.40) * 100),
             help="Maximum allocation to any single asset"
         ) / 100
 
@@ -422,22 +427,23 @@ with col2:
             "Minimum Position Size (%)",
             min_value=0,
             max_value=20,
-            value=0,
+            value=int(st.session_state.settings.get('min_weight', 0.02) * 100),
             help="Minimum allocation (positions below this become 0)"
         ) / 100
 
     with st.expander("Advanced Constraints"):
         allow_fractional = st.checkbox(
             "Allow Fractional Shares",
-            value=False,
+            value=st.session_state.settings.get('allow_fractional', False),
             help="Enable fractional share purchases"
         )
 
+        _tv_dec = st.session_state.settings.get('target_volatility', 0.0) or 0.0
         target_volatility = st.number_input(
             "Target Volatility (%, 0 = no target)",
             min_value=0.0,
             max_value=100.0,
-            value=0.0
+            value=float(_tv_dec * 100)
         )
 
 # Store settings in session state
@@ -450,6 +456,20 @@ st.session_state.settings = {
     'allow_fractional': allow_fractional,
     'target_volatility': target_volatility / 100 if target_volatility > 0 else None,
 }
+
+if st.button("Save Settings", key="save_settings_p1"):
+    current = load_settings()
+    current["portfolio"]["total_capital"] = st.session_state.settings.get(
+        "total_capital", current["portfolio"]["total_capital"]
+    )
+    current["portfolio"]["tickers"] = st.session_state.get(
+        "tickers", current["portfolio"]["tickers"]
+    )
+    if save_settings(current):
+        st.success("Settings saved — portfolio value and tickers will be "
+                   "restored next session.")
+    else:
+        st.error("Failed to save settings. Check write permissions on data/.")
 
 st.markdown("---")
 
