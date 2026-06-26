@@ -62,8 +62,8 @@ stress_tester = StressTester(returns, weights, portfolio_value)
 st.markdown("---")
 
 # Tabs
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "Historical Scenarios", "Monte Carlo", "Custom Stress", "🔬 Sector Shock", "🌐 Macro Contagion"
+tab1, tab2, tab3, tab4 = st.tabs([
+    "Historical Scenarios", "Monte Carlo", "🔬 Sector Shock", "🌐 Macro Contagion"
 ])
 
 with tab1:
@@ -301,60 +301,6 @@ with tab2:
             st.plotly_chart(fig, width="stretch")
 
 with tab3:
-    st.subheader("Custom Stress Test")
-
-    st.markdown("Define a custom shock scenario:")
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        equity_shock = st.slider("Equity Shock (%)", -50, 0, -20) / 100
-        vol_mult = st.slider("Volatility Multiplier", 1.0, 5.0, 2.0)
-
-    with col2:
-        corr_adj = st.slider("Correlation Adjustment", 0.5, 1.0, 0.9)
-
-    if st.button("Apply Custom Stress"):
-        result = stress_tester.parametric_stress(equity_shock, vol_mult, corr_adj)
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Portfolio Return", f"{result['portfolio_return']*100:.1f}%")
-        with col2:
-            st.metric("Portfolio Loss", f"${abs(result['portfolio_loss']):,.0f}")
-        with col3:
-            st.metric("Ending Value", f"${result['ending_value']:,.0f}")
-
-        st.markdown(f"**Stressed Volatility:** {result['stressed_volatility']*100:.1f}%")
-
-    # Sensitivity analysis
-    st.markdown("---")
-    st.markdown("**Sensitivity Analysis**")
-
-    if st.button("Run Sensitivity Analysis"):
-        sensitivity = stress_tester.sensitivity_analysis()
-
-        fig = go.Figure(data=[
-            go.Scatter(
-                x=sensitivity['Shock'] * 100,
-                y=sensitivity['Ending Value'],
-                mode='lines+markers',
-                line=dict(color='blue')
-            )
-        ])
-        fig.add_hline(y=portfolio_value, line_dash="dash", line_color="red",
-                      annotation_text="Initial")
-
-        fig.update_layout(
-            title="Portfolio Value vs Market Shock",
-            xaxis_title="Market Shock (%)",
-            yaxis_title="Portfolio Value ($)"
-        )
-        st.plotly_chart(fig, width="stretch")
-
-        st.dataframe(sensitivity.round(2), width="stretch")
-
-with tab4:
     st.subheader("Sector Shock Stress Test")
     st.markdown(
         "Propagates sector-level shocks through a portfolio using "
@@ -862,7 +808,7 @@ with tab4:
             st.plotly_chart(_fig_cmp, width="stretch")
 
 
-with tab5:
+with tab4:
     st.subheader("Macro Contagion Stress Test")
     st.markdown(
         "Applies macroeconomic shocks via the **Leontief Input-Output** contagion model. "
