@@ -192,7 +192,7 @@ if method == "black_litterman":
 # Turnover / position reduction constraint expander
 _saved_constraints = load_settings()
 
-with st.expander("🔒 Position Reduction Constraint", expanded=False):
+with st.expander("Position Reduction Constraint", expanded=False):
     st.caption(
         "Limits how much each position can change from its current size. "
         "Requires current holdings to be entered in Portfolio Input first."
