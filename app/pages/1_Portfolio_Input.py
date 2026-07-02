@@ -75,7 +75,7 @@ with st.sidebar:
         _preset_options,
         key="sidebar_preset_select",
         on_change=_on_quick_preset_change,
-        help="Built-in starter baskets, or your own saved presets (⭐) — "
+        help="Built-in starter baskets, or your own saved presets — "
              "picking a saved preset instantly loads its tickers, weights, "
              "and value.",
     )
