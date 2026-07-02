@@ -113,6 +113,12 @@ class PortfolioOptimizer:
                 'method': method,
             }
 
+        except ValueError:
+            # Constraint validation errors (e.g. infeasible turnover bounds)
+            # already carry an actionable, user-facing message — let them
+            # propagate as-is instead of masking them behind OptimizationError,
+            # which callers don't catch for this case.
+            raise
         except Exception as e:
             logger.error(f"Optimization failed: {e}")
             raise OptimizationError(f"Optimization failed: {e}")
@@ -298,127 +304,6 @@ class PortfolioOptimizer:
         """Equal weight allocation."""
         return np.ones(self.n_assets) / self.n_assets
 
-    def _check_turnover_feasibility(
-        self,
-        lower_bounds: list,
-        upper_bounds: list,
-    ) -> None:
-        """
-        Verify that turnover-constrained bounds are feasible before optimization.
-
-        A constraint set is infeasible if:
-        - sum(lower_bounds) > 1.0: even minimum allocations exceed 100%
-        - sum(upper_bounds) < 1.0: even maximum allocations cannot reach 100%
-
-        Parameters
-        ----------
-        lower_bounds : list of float
-            Per-asset lower weight bounds.
-        upper_bounds : list of float
-            Per-asset upper weight bounds.
-
-        Raises
-        ------
-        ValueError
-            With a human-readable message explaining which direction is infeasible
-            and what the user should do to fix it.
-        """
-        sum_lower = sum(lower_bounds)
-        sum_upper = sum(upper_bounds)
-
-        # Catch both truly infeasible (sum > 1.0) and degenerate (sum == 1.0, zero
-        # optimization freedom) cases. Using 1e-6 tolerance captures floating-point
-        # noise and the degenerate edge case where every weight is locked at its floor.
-        if sum_lower > 1.0 - 1e-6:
-            raise ValueError(
-                f"Position reduction constraint infeasible: "
-                f"sum of minimum weights = {sum_lower:.3f} > 1.0. "
-                f"Increase the maximum reduction percentage "
-                f"(currently allowing only {(1 - self.constraints.reduction_pct)*100:.0f}% "
-                f"of each position to be retained as minimum) "
-                f"or enable 'Allow full exit'."
-            )
-        if sum_upper < 1.0 - 1e-6:
-            raise ValueError(
-                f"Position increase constraint infeasible: "
-                f"sum of maximum weights = {sum_upper:.3f} < 1.0. "
-                f"Increase the maximum increase percentage "
-                f"(currently allowing only {self.constraints.increase_pct*100:.0f}% "
-                f"increase per position)."
-            )
-
-    def _compute_bounds(
-        self,
-        tickers: list,
-    ) -> tuple:
-        """
-        Compute per-asset (lower, upper) weight bounds.
-
-        When turnover_enabled=False: all assets get (min_weight, max_weight).
-        When turnover_enabled=True: assets bounded within trading band around
-        their current weight. New positions (not in current_weights) get
-        standard (min_weight, max_weight) bounds.
-
-        Parameters
-        ----------
-        tickers : list of str
-            Asset names in the same order as the returns DataFrame columns.
-
-        Returns
-        -------
-        tuple of (float, float)
-            One (lb, ub) per ticker, in same order as tickers list.
-        """
-        c = self.constraints
-
-        # Standard bounds path — no turnover constraint
-        if not c.turnover_enabled or c.current_weights is None:
-            if c.turnover_enabled and c.current_weights is None:
-                logger.warning(
-                    "PortfolioOptimizer: turnover_enabled=True but "
-                    "current_weights is None — falling back to standard bounds"
-                )
-            return tuple((c.min_weight, c.max_weight) for _ in tickers)
-
-        # Turnover-constrained bounds path
-        lower_bounds = []
-        upper_bounds = []
-
-        for ticker in tickers:
-            if ticker in c.current_weights.index:
-                current_w = float(c.current_weights[ticker])
-
-                # Lower bound
-                if c.allow_full_exit:
-                    lb = 0.0
-                else:
-                    lb = max(
-                        c.min_weight,
-                        current_w * (1.0 - c.reduction_pct)
-                    )
-
-                # Upper bound
-                ub = min(
-                    c.max_weight,
-                    current_w * (1.0 + c.increase_pct)
-                )
-
-                # Safety: ensure ub >= lb
-                ub = max(ub, lb)
-
-            else:
-                # New position: no turnover restriction
-                lb = c.min_weight
-                ub = c.max_weight
-
-            lower_bounds.append(lb)
-            upper_bounds.append(ub)
-
-        # Feasibility check before returning
-        self._check_turnover_feasibility(lower_bounds, upper_bounds)
-
-        return tuple(zip(lower_bounds, upper_bounds))
-
     def _run_optimization(
         self,
         objective: callable,
@@ -434,14 +319,11 @@ class PortfolioOptimizer:
         Returns:
             Optimal weights
         """
-        # Store constraints on self so _compute_bounds can access them
-        self.constraints = constraints
-
         # Initial guess: equal weights
         init_weights = np.ones(self.n_assets) / self.n_assets
 
         # Bounds — uses turnover trading band when turnover_enabled=True
-        bounds = self._compute_bounds(self.tickers)
+        bounds = constraints.compute_bounds(self.tickers)
 
         # Constraints for scipy
         scipy_constraints = [
