@@ -14,6 +14,7 @@ from src.data.data_manager import DataManager
 from src.utils.helpers import validate_tickers
 from src.portfolio.holdings import HoldingsTracker
 from src.utils.settings_manager import load_settings, save_settings
+from src.utils.preset_manager import list_presets, load_preset, apply_preset_to_state
 
 st.set_page_config(page_title="Portfolio Input", page_icon=None, layout="wide")
 
@@ -37,12 +38,57 @@ if 'settings' not in st.session_state:
 # Sidebar for quick settings
 with st.sidebar:
     st.header("Quick Settings")
+
+    # Saved presets (from the Portfolio Presets page) are appended after the
+    # built-in starter baskets so they're one click away — picking one loads
+    # its tickers/weights/value into session_state immediately.
+    _saved_presets = list_presets()
+    _name_counts: dict[str, int] = {}
+    for _p in _saved_presets:
+        _name_counts[_p["name"]] = _name_counts.get(_p["name"], 0) + 1
+
+    _saved_id_by_label: dict[str, str] = {}
+    _saved_labels = []
+    for _p in _saved_presets:
+        _label = f"⭐ {_p['name']}"
+        if _name_counts[_p["name"]] > 1:
+            _label += f" ({_p['preset_id'][:8]})"
+        _saved_labels.append(_label)
+        _saved_id_by_label[_label] = _p["preset_id"]
+
+    _preset_options = ["Custom", "Tech Giants", "Diversified ETFs", "Blue Chips"] + _saved_labels
+
+    def _on_quick_preset_change():
+        selected = st.session_state.get("sidebar_preset_select")
+        preset_id = _saved_id_by_label.get(selected)
+        if preset_id is None:
+            return
+        data = load_preset(preset_id)
+        if data is None:
+            st.session_state["_quick_preset_load_error"] = True
+        else:
+            apply_preset_to_state(data, st.session_state)
+            st.session_state["_quick_preset_loaded_name"] = data["name"]
+
     preset = st.selectbox(
         "Load Preset Portfolio",
-        ["Custom", "Tech Giants", "Diversified ETFs", "Blue Chips"]
+        _preset_options,
+        key="sidebar_preset_select",
+        on_change=_on_quick_preset_change,
+        help="Built-in starter baskets, or your own saved presets (⭐) — "
+             "picking a saved preset instantly loads its tickers, weights, "
+             "and value.",
     )
 
-    if preset == "Tech Giants":
+    if st.session_state.pop("_quick_preset_load_error", False):
+        st.error("Failed to load that preset — it may be corrupt. Check logs for details.")
+    _loaded_name = st.session_state.pop("_quick_preset_loaded_name", None)
+    if _loaded_name:
+        st.success(f"Loaded '{_loaded_name}'.")
+
+    if preset in _saved_id_by_label:
+        default_tickers = ", ".join(st.session_state.get("tickers", []))
+    elif preset == "Tech Giants":
         default_tickers = "AAPL, MSFT, GOOGL, AMZN, NVDA"
     elif preset == "Diversified ETFs":
         default_tickers = "SPY, QQQ, IWM, EFA, AGG"

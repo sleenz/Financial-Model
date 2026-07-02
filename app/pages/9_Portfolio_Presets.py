@@ -16,6 +16,7 @@ from src.utils.preset_manager import (
     update_preset,
     rename_preset,
     delete_preset,
+    apply_preset_to_state,
 )
 
 st.set_page_config(page_title="Portfolio Presets", page_icon=None, layout="wide")
@@ -61,16 +62,7 @@ def _current_portfolio_state():
 
 def _apply_preset_to_session(preset: dict) -> None:
     """Populate session_state / widgets with a loaded preset's saved data."""
-    tickers = list(preset.get("tickers", []))
-    weights = list(preset.get("weights", []))
-    st.session_state.tickers = tickers
-    st.session_state.weights = pd.Series(weights, index=tickers, dtype=float)
-    st.session_state.current_portfolio_weights = st.session_state.weights
-    st.session_state.portfolio_value = float(preset.get("portfolio_value", 0.0))
-    if 'settings' not in st.session_state:
-        st.session_state.settings = {}
-    st.session_state.settings['total_capital'] = float(preset.get("portfolio_value", 0.0))
-    st.session_state.loaded_preset_id = preset.get("preset_id")
+    apply_preset_to_state(preset, st.session_state)
 
 
 st.markdown("---")
