@@ -496,9 +496,11 @@ ReportGenerator + template --> PDF bytes --> st.download_button()
 
 All Streamlit pages share state through `st.session_state`. The keys written by each page are:
 
-**Page 1 writes:** `tickers`, `portfolio_data` (`{prices, returns, start_date, end_date, current_prices}`), `current_holdings`, `holdings_tracker`, `current_portfolio_weights`, `settings` (`{total_capital, optimization_method, risk_free_rate, max_weight, min_weight, allow_fractional, target_volatility}`)
+**Page 1 writes:** `tickers`, `portfolio_data` (`{prices, returns, start_date, end_date, current_prices}`), `current_holdings`, `holdings_tracker`, `current_portfolio_weights`
 
-**Page 2 writes:** `optimization_result` (`{weights, expected_return, volatility, sharpe_ratio, method}`), `optimizer`, `weights`, `returns`, `prices`, `portfolio_value`, `metrics`
+**Page 2 writes:** `settings` (`{total_capital, optimization_method, risk_free_rate, max_weight, min_weight, allow_fractional, target_volatility}`), `optimization_result` (`{weights, expected_return, volatility, sharpe_ratio, method}`), `optimizer`, `weights`, `returns`, `prices`, `portfolio_value`, `metrics`
+
+Investment parameters and all constraints (position limits, advanced constraints, position reduction/turnover) are configured on Page 2 (Optimization) — Page 1 is limited to ticker/holdings entry.
 
 **Page 4 writes:** `historical_actual_results`, `ss_engine`, `ss_result`, `ss_all_results`, `ss_sector_map`, `macro_stress_engine`, `macro_stress_result`, `macro_stress_all_results`
 
@@ -514,7 +516,7 @@ Pages 3-7 read from `portfolio_data` + `weights` + `optimization_result`. If any
 |---|---|---|
 | Home | `Home.py` | Feature overview, quick start, session init |
 | Portfolio Input | `1_Portfolio_Input.py` | Holdings entry (tickers + shares) or manual tickers; diversity analysis |
-| Optimization | `2_Optimization.py` | Method selection, run optimizer, rebalancing diff, position sizing, efficient frontier, method comparison |
+| Optimization | `2_Optimization.py` | Capital/method/risk-free rate, constraints (position limits, advanced, position reduction), run optimizer, rebalancing diff, position sizing, efficient frontier, method comparison |
 | Risk Analytics | `3_Risk_Analytics.py` | VaR, drawdown, correlation, volatility tabs; deep risk analysis (enhanced VaR, tail risk, Monte Carlo); hedging effectiveness (risk contribution, beta classification, diversification waterfall, ENB) |
 | Stress Testing | `4_Stress_Testing.py` | Historical scenarios (actual per-stock returns), Monte Carlo (4 methods), Sector Shock (ETF beta + DCC + Copula + HMM), Macro Contagion (Leontief) |
 | Monitoring | `5_Monitoring.py` | Rebalancing drift, performance attribution, DCA scheduler |
