@@ -417,103 +417,19 @@ with tab2:
 
 st.markdown("---")
 
-# Capital and optimization settings
-col1, col2 = st.columns(2)
+st.caption(
+    "Investment parameters (capital, method, risk-free rate) and constraints "
+    "now live on the **Optimization** page, alongside the position reduction "
+    "constraint — everything the optimizer needs is in one place there."
+)
 
-with col1:
-    st.subheader("Investment Parameters")
-
-    total_capital = st.number_input(
-        "Total Capital ($)",
-        min_value=1000,
-        max_value=100000000,
-        value=int(st.session_state.settings.get('total_capital', 100000)),
-        step=1000,
-        help="Total amount to invest"
-    )
-
-    _p1_method_opts = [
-        "Maximum Sharpe Ratio",
-        "Minimum Volatility",
-        "Risk Parity",
-        "Hierarchical Risk Parity (HRP)",
-        "Maximum Diversification",
-        "Equal Weight",
-    ]
-    _saved_method = st.session_state.settings.get('optimization_method', "Maximum Sharpe Ratio")
-    _p1_method_idx = _p1_method_opts.index(_saved_method) if _saved_method in _p1_method_opts else 0
-    optimization_method = st.selectbox(
-        "Optimization Method",
-        _p1_method_opts,
-        index=_p1_method_idx,
-        help="Algorithm to use for portfolio optimization"
-    )
-
-    risk_free_rate = st.slider(
-        "Risk-Free Rate (%)",
-        min_value=0.0,
-        max_value=10.0,
-        value=float(st.session_state.settings.get('risk_free_rate', 0.05) * 100),
-        step=0.1
-    ) / 100
-
-with col2:
-    st.subheader("Constraints")
-
-    with st.expander("Position Limits", expanded=True):
-        max_weight = st.slider(
-            "Maximum Position Size (%)",
-            min_value=5,
-            max_value=100,
-            value=int(st.session_state.settings.get('max_weight', 0.40) * 100),
-            help="Maximum allocation to any single asset"
-        ) / 100
-
-        min_weight = st.slider(
-            "Minimum Position Size (%)",
-            min_value=0,
-            max_value=20,
-            value=int(st.session_state.settings.get('min_weight', 0.02) * 100),
-            help="Minimum allocation (positions below this become 0)"
-        ) / 100
-
-    with st.expander("Advanced Constraints"):
-        allow_fractional = st.checkbox(
-            "Allow Fractional Shares",
-            value=st.session_state.settings.get('allow_fractional', False),
-            help="Enable fractional share purchases"
-        )
-
-        _tv_dec = st.session_state.settings.get('target_volatility', 0.0) or 0.0
-        target_volatility = st.number_input(
-            "Target Volatility (%, 0 = no target)",
-            min_value=0.0,
-            max_value=100.0,
-            value=float(_tv_dec * 100)
-        )
-
-# Store settings in session state
-st.session_state.settings = {
-    'total_capital': total_capital,
-    'optimization_method': optimization_method,
-    'risk_free_rate': risk_free_rate,
-    'max_weight': max_weight,
-    'min_weight': min_weight,
-    'allow_fractional': allow_fractional,
-    'target_volatility': target_volatility / 100 if target_volatility > 0 else None,
-}
-
-if st.button("Save Settings", key="save_settings_p1"):
+if st.button("Save Tickers", key="save_settings_p1"):
     current = load_settings()
-    current["portfolio"]["total_capital"] = st.session_state.settings.get(
-        "total_capital", current["portfolio"]["total_capital"]
-    )
     current["portfolio"]["tickers"] = st.session_state.get(
         "tickers", current["portfolio"]["tickers"]
     )
     if save_settings(current):
-        st.success("Settings saved — portfolio value and tickers will be "
-                   "restored next session.")
+        st.success("Tickers saved — they will be restored next session.")
     else:
         st.error("Failed to save settings. Check write permissions on data/.")
 
