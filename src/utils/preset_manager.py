@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+import pandas as pd
+
 from .logger import get_logger
 
 logger = get_logger(__name__)
@@ -231,6 +233,29 @@ def rename_preset(preset_id: str, new_name: str) -> bool:
 
     logger.info(f"preset_manager: renamed preset_id={preset_id} to name='{new_name}' at {now}")
     return True
+
+
+def apply_preset_to_state(preset: dict[str, Any], state: Any) -> None:
+    """
+    Populate a Streamlit-like session_state object with a preset's saved
+    tickers/weights/value and track it as the currently loaded preset, so
+    that any page offering a "load this preset" action (the dedicated
+    Presets page, or a quick-load shortcut elsewhere) behaves identically.
+    """
+    tickers = list(preset.get("tickers", []))
+    weights = list(preset.get("weights", []))
+    value = float(preset.get("portfolio_value", 0.0))
+
+    state["tickers"] = tickers
+    state["weights"] = pd.Series(weights, index=tickers, dtype=float)
+    state["current_portfolio_weights"] = state["weights"]
+    state["portfolio_value"] = value
+
+    if not state.get("settings"):
+        state["settings"] = {}
+    state["settings"]["total_capital"] = value
+
+    state["loaded_preset_id"] = preset.get("preset_id")
 
 
 def delete_preset(preset_id: str) -> bool:
