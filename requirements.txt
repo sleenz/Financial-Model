@@ -11,7 +11,7 @@ requests>=2.31.0
 
 # Risk & Volatility
 arch>=6.3.0
-hmmlearn>=0.3.0
+hmmlearn>=0.3.3
 
 # Optional: LSEG Data Library (required for TRBC sector lookups; yfinance fallback used otherwise)
 # lseg-data>=2.0.0
@@ -37,7 +37,6 @@ joblib>=1.3.0
 tqdm>=4.66.0
 tabulate>=0.9.0
 rich>=13.0.0
-
 networkx>=3.0
 fredapi>=0.5.0
 tradingeconomics>=0.3.0
