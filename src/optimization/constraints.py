@@ -157,7 +157,10 @@ class PortfolioConstraints:
                     "PortfolioConstraints: turnover_enabled=True but "
                     "current_weights is None — falling back to standard bounds"
                 )
-            return [(self.min_weight, self.max_weight) for _ in tickers]
+            lower_bounds = [self.min_weight for _ in tickers]
+            upper_bounds = [self.max_weight for _ in tickers]
+            self._check_bounds_feasibility(lower_bounds, upper_bounds)
+            return list(zip(lower_bounds, upper_bounds))
 
         lower_bounds = []
         upper_bounds = []
@@ -181,17 +184,82 @@ class PortfolioConstraints:
             lower_bounds.append(lb)
             upper_bounds.append(ub)
 
-        self._check_turnover_feasibility(lower_bounds, upper_bounds)
+        self._check_bounds_feasibility(lower_bounds, upper_bounds)
 
         return list(zip(lower_bounds, upper_bounds))
 
-    def _check_turnover_feasibility(
+    def project_to_bounds(self, weights: np.ndarray, tickers: List[str]) -> np.ndarray:
+        """
+        Project a weight vector onto this constraint set's per-asset bounds
+        (position limits and, if enabled, the position reduction/turnover
+        band) while keeping the weights summing to 1.
+
+        This exists because some optimization methods — Hierarchical Risk
+        Parity and Equal Weight — compute weights purely from the
+        covariance/correlation structure (or a flat 1/n split) and never
+        look at `constraints` at all. Without this step, changing Position
+        Limits or the Position Reduction band and re-running with one of
+        those methods silently produces the exact same weights every time.
+        For methods that already solve with `compute_bounds()` as scipy
+        bounds (max_sharpe, min_volatility, ...), the result is already
+        feasible, so this is a no-op safety net for them.
+
+        Uses iterative water-filling: clip to bounds, then redistribute the
+        remaining budget across assets not yet pinned to a bound, repeating
+        until every asset is either pinned or the budget is exhausted.
+
+        Parameters
+        ----------
+        weights : np.ndarray
+            Raw weights to project, in the same order as `tickers`.
+        tickers : list of str
+            Asset names, in the same order as `weights`.
+
+        Returns
+        -------
+        np.ndarray
+            Weights within [lb, ub] per asset, summing to 1.
+        """
+        bounds = self.compute_bounds(tickers)
+        lb = np.array([b[0] for b in bounds], dtype=float)
+        ub = np.array([b[1] for b in bounds], dtype=float)
+
+        w = np.clip(np.asarray(weights, dtype=float), lb, ub)
+        active = np.ones(len(w), dtype=bool)
+
+        for _ in range(len(w)):
+            if not active.any():
+                break
+
+            remaining = 1.0 - w[~active].sum()
+            active_sum = w[active].sum()
+
+            if active_sum <= 1e-12:
+                # Nothing left to scale proportionally — split what's left
+                # equally among the still-active assets instead.
+                w[active] = remaining / active.sum()
+            else:
+                w[active] *= remaining / active_sum
+
+            newly_pinned = active & ((w > ub + 1e-9) | (w < lb - 1e-9))
+            if not newly_pinned.any():
+                break
+            w[newly_pinned] = np.clip(w[newly_pinned], lb[newly_pinned], ub[newly_pinned])
+            active &= ~newly_pinned
+
+        return w
+
+    def _check_bounds_feasibility(
         self,
         lower_bounds: List[float],
         upper_bounds: List[float],
     ) -> None:
         """
-        Verify that turnover-constrained bounds are feasible before optimization.
+        Verify that per-asset bounds are feasible before optimization —
+        i.e. that 100% allocation is actually reachable within them.
+        Applies to both the plain Position Limits bounds and the
+        turnover-constrained trading band; the error message is tailored
+        to whichever is actually active so it points at the right slider.
 
         Raises
         ------
@@ -201,26 +269,41 @@ class PortfolioConstraints:
         """
         sum_lower = sum(lower_bounds)
         sum_upper = sum(upper_bounds)
+        turnover_active = self.turnover_enabled and self.current_weights is not None
 
         # Catch both truly infeasible (sum > 1.0) and degenerate (sum == 1.0, zero
         # optimization freedom) cases. Using 1e-6 tolerance captures floating-point
         # noise and the degenerate edge case where every weight is locked at its floor.
         if sum_lower > 1.0 - 1e-6:
+            if turnover_active:
+                raise ValueError(
+                    f"Position reduction constraint infeasible: "
+                    f"sum of minimum weights = {sum_lower:.3f} > 1.0. "
+                    f"Increase the maximum reduction percentage "
+                    f"(currently allowing only {(1 - self.reduction_pct)*100:.0f}% "
+                    f"of each position to be retained as minimum) "
+                    f"or enable 'Allow full exit'."
+                )
             raise ValueError(
-                f"Position reduction constraint infeasible: "
-                f"sum of minimum weights = {sum_lower:.3f} > 1.0. "
-                f"Increase the maximum reduction percentage "
-                f"(currently allowing only {(1 - self.reduction_pct)*100:.0f}% "
-                f"of each position to be retained as minimum) "
-                f"or enable 'Allow full exit'."
+                f"Position limits infeasible: sum of minimum weights = "
+                f"{sum_lower:.3f} > 1.0. {len(lower_bounds)} assets at a "
+                f"{self.min_weight*100:.1f}% minimum each already exceed 100% — "
+                f"lower the Minimum Position Size."
             )
         if sum_upper < 1.0 - 1e-6:
+            if turnover_active:
+                raise ValueError(
+                    f"Position increase constraint infeasible: "
+                    f"sum of maximum weights = {sum_upper:.3f} < 1.0. "
+                    f"Increase the maximum increase percentage "
+                    f"(currently allowing only {self.increase_pct*100:.0f}% "
+                    f"increase per position)."
+                )
             raise ValueError(
-                f"Position increase constraint infeasible: "
-                f"sum of maximum weights = {sum_upper:.3f} < 1.0. "
-                f"Increase the maximum increase percentage "
-                f"(currently allowing only {self.increase_pct*100:.0f}% "
-                f"increase per position)."
+                f"Position limits infeasible: sum of maximum weights = "
+                f"{sum_upper:.3f} < 1.0. {len(upper_bounds)} assets at a "
+                f"{self.max_weight*100:.1f}% maximum each cannot reach 100% — "
+                f"raise the Maximum Position Size."
             )
 
     def get_sector_constraints(
