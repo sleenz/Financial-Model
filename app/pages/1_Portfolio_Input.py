@@ -27,7 +27,12 @@ if 'tickers' not in st.session_state:
 if 'portfolio_data' not in st.session_state:
     st.session_state.portfolio_data = None
 if 'current_holdings' not in st.session_state:
-    st.session_state.current_holdings = {}
+    # Restore previously saved holdings (ticker -> shares) so Option 1 is
+    # pre-filled automatically instead of asking the user to re-enter them.
+    _saved_holdings = load_settings()["portfolio"].get("holdings", {})
+    st.session_state.current_holdings = dict(_saved_holdings)
+    if _saved_holdings:
+        st.session_state._holdings_restored = True
 if 'holdings_tracker' not in st.session_state:
     st.session_state.holdings_tracker = None
 if 'current_portfolio_weights' not in st.session_state:
@@ -177,6 +182,13 @@ with tab1:
 
     # Display current holdings
     if st.session_state.current_holdings:
+        if st.session_state.pop("_holdings_restored", False):
+            st.info(
+                f"Restored {len(st.session_state.current_holdings)} holding"
+                f"{'s' if len(st.session_state.current_holdings) != 1 else ''} "
+                "from your last saved session."
+            )
+
         st.markdown("**Your Current Holdings:**")
 
         holdings_df = pd.DataFrame([
@@ -423,13 +435,17 @@ st.caption(
     "constraint — everything the optimizer needs is in one place there."
 )
 
-if st.button("Save Tickers", key="save_settings_p1"):
+if st.button("Save Holdings", key="save_settings_p1"):
     current = load_settings()
     current["portfolio"]["tickers"] = st.session_state.get(
         "tickers", current["portfolio"]["tickers"]
     )
+    current["portfolio"]["holdings"] = dict(st.session_state.get("current_holdings", {}))
     if save_settings(current):
-        st.success("Tickers saved — they will be restored next session.")
+        st.success(
+            "Holdings saved — your tickers and share counts will be "
+            "restored automatically next session."
+        )
     else:
         st.error("Failed to save settings. Check write permissions on data/.")
 
