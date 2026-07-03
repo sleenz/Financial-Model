@@ -29,6 +29,7 @@ so Phase 2 wiring is a one-line swap, not a rewrite of this module.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -54,6 +55,30 @@ class FetchConfig:
 def _infer_market(ticker: str) -> str:
     """"US" | "IDX" — IDX tickers use the .JK (Jakarta) suffix elsewhere in this codebase."""
     return "IDX" if ticker.upper().endswith(".JK") else "US"
+
+
+def _safe_numeric(value, ticker: str, field_name: str) -> float:
+    """Coerce to float, raising rather than silently caching NaN/inf into a
+    REAL NOT NULL SQLite column or corrupting an otherwise-valid composite
+    score. A total-fetch-failure ticker should show up in run_nightly_refresh's
+    'failed' list, not as a fake 0.0 (or worse, NaN) composite_score."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{ticker}: {field_name}={value!r} is not numeric: {exc}") from exc
+    if math.isnan(f) or math.isinf(f):
+        raise RuntimeError(f"{ticker}: {field_name}={f} is NaN/inf, refusing to cache")
+    return f
+
+
+def _json_safe(value):
+    """None/NaN/inf -> None so factor_zscores always serializes to valid JSON
+    (Python's json.dumps otherwise emits the non-standard token 'NaN')."""
+    if value is None:
+        return None
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
+        return None
+    return value
 
 
 class PortfolioDataLayer:
@@ -122,21 +147,28 @@ def _build_entry(ticker: str, data_layer: PortfolioDataLayer) -> RankedUniverseE
     for w in fundamentals.get("warnings", []):
         logger.warning(f"{ticker}: {w}")
 
-    mfs = fundamentals.get("multi_factor") or {}
+    mfs = fundamentals.get("multi_factor")
+    if mfs is None:
+        # multi_factor_score() failed entirely (see fetch_fundamentals) — there
+        # is no legitimate total_score to report. Raising here (instead of
+        # caching a placeholder 0.0) is what lets compute_universe_entries'
+        # per-ticker try/except and run_nightly_refresh correctly count this
+        # ticker as failed rather than "refreshed" with a meaningless score.
+        raise RuntimeError(f"{ticker}: multi_factor_score fetch failed entirely — refusing to cache a placeholder composite_score")
     dcf = fundamentals.get("dcf") or {}
 
-    composite_score = float(mfs.get("total_score", 0.0))
+    composite_score = _safe_numeric(mfs.get("total_score", 0.0), ticker, "total_score")
     factor_zscores = {
         # Interim proxies from stock_valuer's existing pipeline — see module
         # docstring. Phase 2's RankingEngine replaces these with true
         # sector-neutral z-scores over (earnings_yield, roc, momentum, dcf_gap).
-        "quality_score": mfs.get("quality_score", 0.0),
-        "value_score": mfs.get("value_score", 0.0),
-        "momentum_score": mfs.get("momentum_score", 0.0),
-        "growth_score": mfs.get("growth_score", 0.0),
-        "health_score": mfs.get("health_score", 0.0),
-        "implied_growth_rate": dcf.get("implied_growth_rate"),
-        "growth_premium": dcf.get("growth_premium"),
+        "quality_score": _json_safe(mfs.get("quality_score", 0.0)),
+        "value_score": _json_safe(mfs.get("value_score", 0.0)),
+        "momentum_score": _json_safe(mfs.get("momentum_score", 0.0)),
+        "growth_score": _json_safe(mfs.get("growth_score", 0.0)),
+        "health_score": _json_safe(mfs.get("health_score", 0.0)),
+        "implied_growth_rate": _json_safe(dcf.get("implied_growth_rate")),
+        "growth_premium": _json_safe(dcf.get("growth_premium")),
     }
 
     return RankedUniverseEntry(
@@ -220,7 +252,16 @@ class OnDemandFetcher:
         if cached is not None:
             return cached
 
-        entry = _build_entry(ticker, self._data_layer)
+        try:
+            entry = _build_entry(ticker, self._data_layer)
+        except Exception as exc:
+            # Zero silent failures: log with full context and re-raise rather
+            # than letting a bad value (e.g. NaN total_score) crash later as
+            # an opaque sqlite3.IntegrityError deep inside cache.upsert(), or
+            # letting the caller silently receive nothing.
+            logger.error(f"{ticker}: on-demand fetch failed, not caching: {exc}")
+            raise
+
         logger.info(
             f"{ticker}: on-demand fetch complete; correlation_row deferred to next "
             "run_nightly_refresh()"
@@ -239,10 +280,22 @@ class OnDemandFetcher:
 if __name__ == "__main__":
     def _smoke_test():
         from src.portfolio_builder.cache import CacheConfig, UniverseCache
-        from src.portfolio_builder.fetch import OnDemandFetcher
+        from src.portfolio_builder.fetch import (
+            FetchConfig,
+            OnDemandFetcher,
+            PortfolioDataLayer,
+            _build_entry,
+            build_default_data_layer,
+            compute_universe_entries,
+        )
 
         class _MockDataLayer:
-            """No network calls — exercises OnDemandFetcher's control flow only."""
+            """No network calls — exercises the fetch pipeline's control flow only."""
+
+            def __init__(self):
+                # Only 15 synthetic trading days below, so lower the overlap
+                # floor to actually exercise the corr() path in this test.
+                self.config = FetchConfig(min_correlation_overlap_days=5)
 
             def fetch_sector(self, ticker):
                 return "Technology"
@@ -262,8 +315,62 @@ if __name__ == "__main__":
                     "warnings": [],
                 }
 
+            def fetch_prices(self, tickers, start_date, end_date):
+                idx = pd.bdate_range(end=end_date, periods=15)
+                return pd.DataFrame(
+                    {t: [100.0 + i + (hash(t) % 7) for i in range(15)] for t in tickers},
+                    index=idx,
+                )
+
+        # ── Rule 2: every new AND reused name this module touches must resolve ──
+        fc = FetchConfig()
+        assert fc.price_history_days == 400 and fc.dcf_wacc == 0.10
+        default_layer = build_default_data_layer(fc)
+        assert isinstance(default_layer, PortfolioDataLayer)
+        print("✓ FetchConfig / build_default_data_layer / PortfolioDataLayer resolve")
+
+        mock_layer = _MockDataLayer()
+        built = _build_entry("AAPL", mock_layer)
+        assert built.ticker == "AAPL" and built.composite_score == 72.5
+        print("✓ _build_entry resolves and builds a real entry")
+
+        universe_entries = compute_universe_entries(["AAPL", "MSFT"], mock_layer)
+        assert set(universe_entries.keys()) == {"AAPL", "MSFT"}
+        assert len(universe_entries["AAPL"].correlation_row) == 2
+        print("✓ compute_universe_entries resolves and populates correlation_row")
+
+        # ── NaN/failure guard: a total fundamentals failure must raise, not
+        # cache a placeholder score (Phase 1 CHECK finding) ──────────────────
+        class _FailingDataLayer(_MockDataLayer):
+            def fetch_fundamentals(self, ticker):
+                return {"multi_factor": None, "dcf": None, "warnings": ["network down"]}
+
+        try:
+            _build_entry("BADCO", _FailingDataLayer())
+            raise AssertionError("expected RuntimeError on total fundamentals failure")
+        except RuntimeError:
+            pass
+        print("✓ total fundamentals failure raises instead of caching a placeholder score")
+
+        class _NanDataLayer(_MockDataLayer):
+            def fetch_fundamentals(self, ticker):
+                return {
+                    "multi_factor": {"total_score": float("nan"), "quality_score": 0.0,
+                                      "value_score": 0.0, "momentum_score": 0.0,
+                                      "growth_score": 0.0, "health_score": 0.0, "warnings": []},
+                    "dcf": {"implied_growth_rate": None, "growth_premium": None, "warnings": None},
+                    "warnings": [],
+                }
+
+        try:
+            _build_entry("NANCO", _NanDataLayer())
+            raise AssertionError("expected RuntimeError on NaN total_score")
+        except RuntimeError:
+            pass
+        print("✓ NaN composite_score raises instead of corrupting the cache")
+
         cache = UniverseCache(CacheConfig(cache_path=":memory:"))
-        fetcher = OnDemandFetcher(cache, _MockDataLayer())
+        fetcher = OnDemandFetcher(cache, mock_layer)
 
         # ── Cache-miss path ──────────────────────────────────────────────
         entry = fetcher.get_or_fetch("AAPL")

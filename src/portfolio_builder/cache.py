@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -58,35 +59,49 @@ class UniverseCache:
 
     def __init__(self, config: CacheConfig = CacheConfig()):
         self._config = config
+        # check_same_thread=False + a single shared RLock serializing every
+        # method below: Streamlit will share one UniverseCache across
+        # request threads (nightly-refresh writer, many concurrent
+        # readers). Without the lock, concurrent access to one sqlite3
+        # connection from multiple threads corrupts driver-level state
+        # (observed: "no more rows available", "cannot commit - no
+        # transaction is active", even a raw SystemError from the C
+        # extension) — check_same_thread=False alone does not make that
+        # safe, it only lifts sqlite3's own same-thread guard. RLock (not
+        # a plain Lock) because run_nightly_refresh() re-enters via its
+        # own call to self.upsert()/self.set_correlation_index() while
+        # already holding the lock on the same thread.
         if config.cache_path != ":memory:":
             Path(config.cache_path).parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
         self._conn = sqlite3.connect(config.cache_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._init_schema()
 
     def _init_schema(self) -> None:
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ranked_universe (
-                ticker           TEXT PRIMARY KEY,
-                sector           TEXT NOT NULL,
-                market           TEXT NOT NULL,
-                composite_score  REAL NOT NULL,
-                factor_zscores   TEXT NOT NULL,
-                correlation_row  TEXT NOT NULL,
-                computed_at      TEXT NOT NULL
+        with self._lock:
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ranked_universe (
+                    ticker           TEXT PRIMARY KEY,
+                    sector           TEXT NOT NULL,
+                    market           TEXT NOT NULL,
+                    composite_score  REAL NOT NULL,
+                    factor_zscores   TEXT NOT NULL,
+                    correlation_row  TEXT NOT NULL,
+                    computed_at      TEXT NOT NULL
+                )
+                """
             )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS cache_meta (
-                key   TEXT PRIMARY KEY,
-                value TEXT NOT NULL
+            self._conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS cache_meta (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
             )
-            """
-        )
-        self._conn.commit()
+            self._conn.commit()
 
     # ------------------------------------------------------------------
     # Correlation column alignment
@@ -94,21 +109,23 @@ class UniverseCache:
 
     def get_correlation_index(self) -> list:
         """Return the canonical ticker ordering that correlation_row values are aligned to."""
-        row = self._conn.execute(
-            "SELECT value FROM cache_meta WHERE key = 'correlation_index'"
-        ).fetchone()
-        return json.loads(row["value"]) if row else []
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT value FROM cache_meta WHERE key = 'correlation_index'"
+            ).fetchone()
+            return json.loads(row["value"]) if row else []
 
     def set_correlation_index(self, tickers: list) -> None:
         """Replace the canonical ticker ordering. Called by run_nightly_refresh()."""
-        self._conn.execute(
-            """
-            INSERT INTO cache_meta (key, value) VALUES ('correlation_index', ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            """,
-            (json.dumps(list(tickers)),),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO cache_meta (key, value) VALUES ('correlation_index', ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (json.dumps(list(tickers)),),
+            )
+            self._conn.commit()
 
     # ------------------------------------------------------------------
     # Public interface
@@ -117,66 +134,68 @@ class UniverseCache:
     def get(self, ticker: str) -> Optional[RankedUniverseEntry]:
         """Return cached entry if present and within cache_ttl_hours.
         None otherwise — caller triggers the on-demand fetch path."""
-        row = self._conn.execute(
-            "SELECT * FROM ranked_universe WHERE ticker = ?", (ticker,)
-        ).fetchone()
-        if row is None:
-            return None
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM ranked_universe WHERE ticker = ?", (ticker,)
+            ).fetchone()
+            if row is None:
+                return None
 
-        try:
-            computed_at = datetime.fromisoformat(row["computed_at"])
-            if computed_at.tzinfo is None:
-                computed_at = computed_at.replace(tzinfo=timezone.utc)
-            age_hours = (datetime.now(timezone.utc) - computed_at).total_seconds() / 3600.0
-        except (ValueError, TypeError) as exc:
-            logger.error(f"UniverseCache.get({ticker}): malformed computed_at, treating as miss: {exc}")
-            return None
+            try:
+                computed_at = datetime.fromisoformat(row["computed_at"])
+                if computed_at.tzinfo is None:
+                    computed_at = computed_at.replace(tzinfo=timezone.utc)
+                age_hours = (datetime.now(timezone.utc) - computed_at).total_seconds() / 3600.0
+            except (ValueError, TypeError) as exc:
+                logger.error(f"UniverseCache.get({ticker}): malformed computed_at, treating as miss: {exc}")
+                return None
 
-        if age_hours > self._config.cache_ttl_hours:
-            logger.debug(f"UniverseCache: {ticker} expired ({age_hours:.1f}h old)")
-            return None
+            if age_hours > self._config.cache_ttl_hours:
+                logger.debug(f"UniverseCache: {ticker} expired ({age_hours:.1f}h old)")
+                return None
 
-        try:
-            return RankedUniverseEntry(
-                ticker=row["ticker"],
-                sector=row["sector"],
-                market=row["market"],
-                composite_score=row["composite_score"],
-                factor_zscores=json.loads(row["factor_zscores"]),
-                correlation_row=json.loads(row["correlation_row"]),
-                computed_at=row["computed_at"],
-            )
-        except json.JSONDecodeError as exc:
-            logger.error(f"UniverseCache.get({ticker}): corrupted JSON columns, treating as miss: {exc}")
-            return None
+            try:
+                return RankedUniverseEntry(
+                    ticker=row["ticker"],
+                    sector=row["sector"],
+                    market=row["market"],
+                    composite_score=row["composite_score"],
+                    factor_zscores=json.loads(row["factor_zscores"]),
+                    correlation_row=json.loads(row["correlation_row"]),
+                    computed_at=row["computed_at"],
+                )
+            except json.JSONDecodeError as exc:
+                logger.error(f"UniverseCache.get({ticker}): corrupted JSON columns, treating as miss: {exc}")
+                return None
 
     def upsert(self, entry: RankedUniverseEntry) -> None:
         """Insert or overwrite. Nightly job and on-demand fetch both
         call this — same code path, no special-cased 'first time' logic."""
-        self._conn.execute(
-            """
-            INSERT INTO ranked_universe
-                (ticker, sector, market, composite_score, factor_zscores, correlation_row, computed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(ticker) DO UPDATE SET
-                sector          = excluded.sector,
-                market          = excluded.market,
-                composite_score = excluded.composite_score,
-                factor_zscores  = excluded.factor_zscores,
-                correlation_row = excluded.correlation_row,
-                computed_at     = excluded.computed_at
-            """,
-            (
-                entry.ticker,
-                entry.sector,
-                entry.market,
-                float(entry.composite_score),
-                json.dumps(entry.factor_zscores),
-                json.dumps(entry.correlation_row),
-                entry.computed_at,
-            ),
-        )
-        self._conn.commit()
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO ranked_universe
+                    (ticker, sector, market, composite_score, factor_zscores, correlation_row, computed_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(ticker) DO UPDATE SET
+                    sector          = excluded.sector,
+                    market          = excluded.market,
+                    composite_score = excluded.composite_score,
+                    factor_zscores  = excluded.factor_zscores,
+                    correlation_row = excluded.correlation_row,
+                    computed_at     = excluded.computed_at
+                """,
+                (
+                    entry.ticker,
+                    entry.sector,
+                    entry.market,
+                    float(entry.composite_score),
+                    json.dumps(entry.factor_zscores),
+                    json.dumps(entry.correlation_row),
+                    entry.computed_at,
+                ),
+            )
+            self._conn.commit()
 
     def run_nightly_refresh(
         self,
@@ -205,6 +224,9 @@ class UniverseCache:
             if compute_fn is None:
                 compute_fn = compute_universe_entries
 
+        # compute_fn runs outside the lock (it's pure computation + network
+        # I/O, no shared DB access) — only the upsert/index-write phase
+        # below needs to be serialized against other threads.
         try:
             entries_by_ticker = compute_fn(universe, data_layer)
         except Exception as exc:
@@ -213,19 +235,21 @@ class UniverseCache:
 
         refreshed = 0
         failed: list = []
-        for ticker in universe:
-            entry = entries_by_ticker.get(ticker)
-            if entry is None:
-                failed.append(ticker)
-                continue
-            try:
-                self.upsert(entry)
-                refreshed += 1
-            except Exception as exc:
-                logger.error(f"run_nightly_refresh: upsert failed for {ticker}: {exc}")
-                failed.append(ticker)
+        with self._lock:
+            for ticker in universe:
+                entry = entries_by_ticker.get(ticker)
+                if entry is None:
+                    failed.append(ticker)
+                    continue
+                try:
+                    self.upsert(entry)
+                    refreshed += 1
+                except Exception as exc:
+                    logger.error(f"run_nightly_refresh: upsert failed for {ticker}: {exc}")
+                    failed.append(ticker)
 
-        self.set_correlation_index(sorted(universe))
+            self.set_correlation_index(sorted(universe))
+
         duration = time.time() - t0
         logger.info(
             f"run_nightly_refresh: {refreshed}/{len(universe)} refreshed, "
@@ -234,7 +258,8 @@ class UniverseCache:
         return {"refreshed": refreshed, "failed": failed, "duration_s": duration}
 
     def close(self) -> None:
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
 
 if __name__ == "__main__":
