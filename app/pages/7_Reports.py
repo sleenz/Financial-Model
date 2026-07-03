@@ -114,7 +114,7 @@ with col2:
     portfolio_value = st.number_input(
         "Portfolio Value ($)",
         min_value=1000,
-        value=st.session_state.get('portfolio_value', 100000),
+        value=int(st.session_state.get('portfolio_value', 100000)),
         step=1000
     )
 

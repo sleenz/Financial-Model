@@ -61,7 +61,7 @@ with col1:
 with col2:
     capital = st.number_input(
         "Capital ($)",
-        value=settings.get('total_capital', 100000),
+        value=int(settings.get('total_capital', 100000)),
         min_value=1000
     )
 
