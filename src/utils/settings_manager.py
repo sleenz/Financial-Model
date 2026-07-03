@@ -23,6 +23,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "total_capital": 100000,
         "start_date": "2020-01-01",
         "tickers": [],
+        "holdings": {},
     },
     "optimization": {
         "method": "max_sharpe",
