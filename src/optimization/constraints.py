@@ -117,6 +117,112 @@ class PortfolioConstraints:
         """
         return [(self.min_weight, self.max_weight) for _ in range(n_assets)]
 
+    def compute_bounds(self, tickers: List[str]) -> List[Tuple[float, float]]:
+        """
+        Compute per-asset (lower, upper) weight bounds, honoring the position
+        reduction (turnover) trading band when enabled. Shared by every
+        optimizer backend (PortfolioOptimizer, BlackLittermanModel, ...) so
+        the position reduction constraint applies consistently regardless of
+        which optimization method is selected.
+
+        When turnover_enabled=False (or current_weights is None): all assets
+        get the standard (min_weight, max_weight) bounds.
+
+        When turnover_enabled=True: each held asset is bounded within a
+        trading band around its current weight — [current * (1 - reduction_pct),
+        current * (1 + increase_pct)], additionally clamped to [min_weight,
+        max_weight]. New positions (not in current_weights) get the standard
+        (min_weight, max_weight) bounds since there's no "current" position to
+        band around.
+
+        Parameters
+        ----------
+        tickers : list of str
+            Asset names, in the same order the caller wants bounds returned.
+
+        Returns
+        -------
+        list of (float, float)
+            One (lb, ub) per ticker, in the same order as `tickers`.
+
+        Raises
+        ------
+        ValueError
+            If the turnover-constrained bounds are infeasible (e.g. minimum
+            weights already sum to over 100%).
+        """
+        if not self.turnover_enabled or self.current_weights is None:
+            if self.turnover_enabled and self.current_weights is None:
+                logger.warning(
+                    "PortfolioConstraints: turnover_enabled=True but "
+                    "current_weights is None — falling back to standard bounds"
+                )
+            return [(self.min_weight, self.max_weight) for _ in tickers]
+
+        lower_bounds = []
+        upper_bounds = []
+
+        for ticker in tickers:
+            if ticker in self.current_weights.index:
+                current_w = float(self.current_weights[ticker])
+
+                if self.allow_full_exit:
+                    lb = 0.0
+                else:
+                    lb = max(self.min_weight, current_w * (1.0 - self.reduction_pct))
+
+                ub = min(self.max_weight, current_w * (1.0 + self.increase_pct))
+                ub = max(ub, lb)  # safety: ensure ub >= lb
+            else:
+                # New position: no turnover restriction
+                lb = self.min_weight
+                ub = self.max_weight
+
+            lower_bounds.append(lb)
+            upper_bounds.append(ub)
+
+        self._check_turnover_feasibility(lower_bounds, upper_bounds)
+
+        return list(zip(lower_bounds, upper_bounds))
+
+    def _check_turnover_feasibility(
+        self,
+        lower_bounds: List[float],
+        upper_bounds: List[float],
+    ) -> None:
+        """
+        Verify that turnover-constrained bounds are feasible before optimization.
+
+        Raises
+        ------
+        ValueError
+            With a human-readable message explaining which direction is
+            infeasible and what the user should do to fix it.
+        """
+        sum_lower = sum(lower_bounds)
+        sum_upper = sum(upper_bounds)
+
+        # Catch both truly infeasible (sum > 1.0) and degenerate (sum == 1.0, zero
+        # optimization freedom) cases. Using 1e-6 tolerance captures floating-point
+        # noise and the degenerate edge case where every weight is locked at its floor.
+        if sum_lower > 1.0 - 1e-6:
+            raise ValueError(
+                f"Position reduction constraint infeasible: "
+                f"sum of minimum weights = {sum_lower:.3f} > 1.0. "
+                f"Increase the maximum reduction percentage "
+                f"(currently allowing only {(1 - self.reduction_pct)*100:.0f}% "
+                f"of each position to be retained as minimum) "
+                f"or enable 'Allow full exit'."
+            )
+        if sum_upper < 1.0 - 1e-6:
+            raise ValueError(
+                f"Position increase constraint infeasible: "
+                f"sum of maximum weights = {sum_upper:.3f} < 1.0. "
+                f"Increase the maximum increase percentage "
+                f"(currently allowing only {self.increase_pct*100:.0f}% "
+                f"increase per position)."
+            )
+
     def get_sector_constraints(
         self,
         tickers: List[str],

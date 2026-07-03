@@ -95,10 +95,34 @@ st.markdown("---")
 # reduction (turnover) band all grouped together here.
 st.subheader("Constraints")
 
+_saved_constraints = load_settings()
+_CONSTRAINT_MODE_OPTIONS = ["Both", "Position Limits only", "Position Reduction only"]
+_default_constraint_mode = _saved_constraints["constraints"].get("constraint_mode", "Both")
+if _default_constraint_mode not in _CONSTRAINT_MODE_OPTIONS:
+    _default_constraint_mode = "Both"
+
+constraint_mode = st.radio(
+    "Apply which constraints?",
+    _CONSTRAINT_MODE_OPTIONS,
+    index=_CONSTRAINT_MODE_OPTIONS.index(_default_constraint_mode),
+    horizontal=True,
+    help=(
+        "**Both** — Position Limits always cap every trade; the Position "
+        "Reduction band below (if enabled) further restricts moves away from "
+        "your current holdings. **Position Limits only** — ignores the "
+        "Position Reduction band even if it's enabled below. **Position "
+        "Reduction only** — ignores the Maximum/Minimum Position Size sliders "
+        "and bounds trades purely by the Position Reduction band around your "
+        "current holdings."
+    ),
+)
+
 col1, col2 = st.columns(2)
 
 with col1:
-    with st.expander("Position Limits", expanded=True):
+    with st.expander("Position Limits", expanded=(constraint_mode != "Position Reduction only")):
+        if constraint_mode == "Position Reduction only":
+            st.caption("Not applied — constraint mode above is 'Position Reduction only'.")
         max_weight = st.slider(
             "Maximum Position Size (%)",
             min_value=5,
@@ -132,13 +156,13 @@ with col2:
         )
 
 # Turnover / position reduction constraint expander
-_saved_constraints = load_settings()
-
-with st.expander("Position Reduction Constraint", expanded=False):
+with st.expander("Position Reduction Constraint", expanded=(constraint_mode == "Position Reduction only")):
     st.caption(
         "Limits how much each position can change from its current size. "
         "Requires current holdings to be entered in Portfolio Input first."
     )
+    if constraint_mode == "Position Limits only":
+        st.caption("Not applied — constraint mode above is 'Position Limits only'.")
 
     turnover_enabled = st.toggle(
         "Enable position reduction constraint",
@@ -251,6 +275,32 @@ with st.expander("Position Reduction Constraint", expanded=False):
                 "Enter your current holdings in Portfolio Input first "
                 "to see the trading band preview."
             )
+
+st.session_state.constraint_mode = constraint_mode
+
+# Resolve the effective bounds/turnover flag actually passed to the optimizer,
+# after applying the constraint_mode choice above.
+if constraint_mode == "Position Reduction only":
+    _effective_min_weight, _effective_max_weight = 0.0, 1.0
+else:
+    _effective_min_weight, _effective_max_weight = min_weight, max_weight
+
+_effective_turnover_enabled = turnover_enabled and constraint_mode != "Position Limits only"
+
+if constraint_mode == "Position Reduction only":
+    if not turnover_enabled:
+        st.warning(
+            "Constraint mode is 'Position Reduction only' but the Position "
+            "Reduction Constraint toggle above is off — enable it, otherwise "
+            "**no constraints will be applied** to the optimizer."
+        )
+    elif st.session_state.get("current_portfolio_weights") is None:
+        st.warning(
+            "Constraint mode is 'Position Reduction only' but no current "
+            "holdings are loaded — there's nothing to band around, so "
+            "**no constraints will be applied**. Enter holdings on the "
+            "Portfolio Input page first."
+        )
 
 st.markdown("---")
 
@@ -383,6 +433,7 @@ if st.button("Save Optimization Settings", key="save_settings_p2"):
         "reduction_pct":    st.session_state.get("reduction_pct", 0.50),
         "increase_pct":     st.session_state.get("increase_pct", 0.30),
         "allow_full_exit":  st.session_state.get("allow_full_exit", True),
+        "constraint_mode":  constraint_mode,
     })
     if save_settings(current):
         st.success("Optimization settings saved.")
@@ -446,10 +497,20 @@ if st.button(_btn_label, type="primary"):
                         _view["long"], _view["short"],
                         _view["return"], _view["confidence"],
                     )
-            _bl_out = _bl_model.optimize(
-                max_weight=max_weight,
-                min_weight=min_weight,
+            _bl_constraints = PortfolioConstraints(
+                max_weight=_effective_max_weight,
+                min_weight=_effective_min_weight,
+                turnover_enabled=_effective_turnover_enabled,
+                reduction_pct=st.session_state.get("reduction_pct", 0.50),
+                increase_pct=st.session_state.get("increase_pct", 0.30),
+                allow_full_exit=st.session_state.get("allow_full_exit", True),
+                current_weights=st.session_state.get("current_portfolio_weights", None),
             )
+            try:
+                _bl_out = _bl_model.optimize(constraints=_bl_constraints)
+            except ValueError as e:
+                st.error(f"Optimization failed — constraint error: {e}")
+                st.stop()
             # Recompute metrics using historical data so they match Risk Analytics.
             # BL.optimize() uses posterior_cov = Sigma + M for the optimisation
             # objective, but posterior_cov > Sigma inflates volatility and
@@ -472,12 +533,14 @@ if st.button(_btn_label, type="primary"):
             optimizer = None
 
         else:
-            # Create constraints
+            # Create constraints — reflects the "Apply which constraints?"
+            # mode chosen above (Both / Position Limits only / Position
+            # Reduction only).
             constraints = PortfolioConstraints(
-                max_weight=max_weight,
-                min_weight=min_weight,
-                min_position_size=min_weight,
-                turnover_enabled=st.session_state.get("turnover_enabled", False),
+                max_weight=_effective_max_weight,
+                min_weight=_effective_min_weight,
+                min_position_size=_effective_min_weight,
+                turnover_enabled=_effective_turnover_enabled,
                 reduction_pct=st.session_state.get("reduction_pct", 0.50),
                 increase_pct=st.session_state.get("increase_pct", 0.30),
                 allow_full_exit=st.session_state.get("allow_full_exit", True),

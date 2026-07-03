@@ -37,6 +37,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
         "reduction_pct": 0.50,
         "increase_pct": 0.30,
         "allow_full_exit": True,
+        "constraint_mode": "Both",
     },
 }
 

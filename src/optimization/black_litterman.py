@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
+from .constraints import PortfolioConstraints
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -299,13 +300,21 @@ class BlackLittermanModel:
         self,
         max_weight: float = 1.0,
         min_weight: float = 0.0,
+        constraints: Optional[PortfolioConstraints] = None,
     ) -> Dict:
         """
         Optimize portfolio using Black-Litterman returns.
 
         Args:
-            max_weight: Maximum weight per asset
-            min_weight: Minimum weight per asset
+            max_weight: Maximum weight per asset. Ignored if `constraints` is
+                given (its own min_weight/max_weight take over).
+            min_weight: Minimum weight per asset. Ignored if `constraints` is
+                given (its own min_weight/max_weight take over).
+            constraints: Optional PortfolioConstraints. When provided, bounds
+                are computed via constraints.compute_bounds(), which honors
+                the position reduction (turnover) trading band the same way
+                every other optimization method does — without it, Black-
+                Litterman would silently ignore that constraint.
 
         Returns:
             Dictionary with weights and metrics
@@ -324,8 +333,12 @@ class BlackLittermanModel:
         # Initial guess
         init_weights = np.array(self.market_weights)
 
-        # Bounds
-        bounds = [(min_weight, max_weight) for _ in range(self.n_assets)]
+        # Bounds — turnover-aware when a PortfolioConstraints is supplied,
+        # otherwise flat (min_weight, max_weight) for every asset.
+        if constraints is not None:
+            bounds = constraints.compute_bounds(self.tickers)
+        else:
+            bounds = [(min_weight, max_weight) for _ in range(self.n_assets)]
 
         # Constraints
         constraints = [
