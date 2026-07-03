@@ -29,31 +29,9 @@ pip install -r requirements.txt
 ### 3. Launch the web interface
 
 ```bash
-streamlit run app/Home.py
+streamlit run app/Home.py 
+or python -m run app/Home.py
 ```
-
-### 4. Python API
-
-```python
-from src.data.data_manager import DataManager
-from src.optimization.optimizers import PortfolioOptimizer
-
-dm = DataManager()
-prices = dm.get_price_data(['AAPL', 'GOOGL', 'MSFT'], '2020-01-01', '2024-01-01')
-returns = dm.get_returns(['AAPL', 'GOOGL', 'MSFT'], '2020-01-01', '2024-01-01')
-
-optimizer = PortfolioOptimizer(returns)
-result = optimizer.optimize(method='max_sharpe')
-print(result['weights'])
-```
-
-### 5. Standalone stock valuation
-
-```bash
-python stock_valuer.py
-```
-
----
 
 ## Features
 
