@@ -109,7 +109,7 @@ with tab1:
         portfolio_value = st.number_input(
             "Portfolio Value ($)",
             1000, 10000000,
-            st.session_state.get('settings', {}).get('total_capital', 10000)
+            int(st.session_state.get('settings', {}).get('total_capital', 10000))
         )
 
     # Create rebalancer
