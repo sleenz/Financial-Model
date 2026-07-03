@@ -99,6 +99,14 @@ class PortfolioOptimizer:
         try:
             weights = method_map[method](constraints, **kwargs)
 
+            # Enforce position limits / turnover bounds. Scipy-bounded methods
+            # (max_sharpe, min_volatility, ...) already solved within these
+            # bounds, so this is a no-op for them. HRP and equal-weight never
+            # look at `constraints` while computing their raw weights, so
+            # without this step those two methods would silently ignore
+            # Position Limits and Position Reduction entirely.
+            weights = constraints.project_to_bounds(weights, self.tickers)
+
             # Apply minimum position size
             weights = constraints.apply_minimum_position(weights)
 
