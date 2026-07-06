@@ -85,6 +85,20 @@ class SemanticZoomNetwork:
     ticker_network: TickerNetwork
 
 
+def _row_is_complete(row: Optional[list], expected_length: int) -> bool:
+    """A correlation_row only counts as usable if it's the expected length
+    AND every entry is an actual number — not empty, not short, and not
+    containing a None from an unresolvable pairwise correlation (e.g. two
+    tickers with insufficient mutual return overlap; fetch.py stores those
+    as None, not NaN, per its JSON-safety convention). A row with even one
+    None can't feed a complete graph — every kept ticker needs a defined
+    distance to every other kept ticker before an MST can be built — so
+    "full" here means fully populated, not just correctly sized."""
+    if not row or len(row) != expected_length:
+        return False
+    return all(v is not None for v in row)
+
+
 def build_correlation_matrix(
     cache: UniverseCache,
     tickers: Optional[list] = None,
@@ -95,9 +109,11 @@ def build_correlation_matrix(
     cached correlation_row values, aligned via cache.get_correlation_index().
 
     Returns (correlation_df, excluded_tickers) — tickers with no cache
-    entry, a stale entry, or (if config.require_full_correlation_row) an
-    empty/incomplete correlation_row are excluded and reported, not
-    silently dropped from the network with no trace.
+    entry, a stale entry, or (if config.require_full_correlation_row) a
+    correlation_row that's empty, the wrong length, or contains a None
+    for any pairwise correlation, are excluded and reported, not silently
+    dropped from the network with no trace (and not left in to crash MST
+    construction on a NaN edge weight later).
     """
     index = cache.get_correlation_index()
     if not index:
@@ -114,8 +130,8 @@ def build_correlation_matrix(
         if entry is None:
             excluded.append(ticker)
             continue
-        if config.require_full_correlation_row and (
-            not entry.correlation_row or len(entry.correlation_row) != len(index)
+        if config.require_full_correlation_row and not _row_is_complete(
+            entry.correlation_row, len(index)
         ):
             excluded.append(ticker)
             continue
@@ -123,8 +139,9 @@ def build_correlation_matrix(
 
     if excluded:
         logger.warning(
-            f"build_correlation_matrix: excluded {excluded} (missing cache entry or "
-            "incomplete/empty correlation_row)"
+            f"build_correlation_matrix: excluded {excluded} (missing cache entry, "
+            "or correlation_row empty/wrong-length/containing an unresolved "
+            "pairwise correlation)"
         )
     if not rows:
         raise ValueError("build_correlation_matrix: no tickers had usable correlation data")
@@ -178,9 +195,19 @@ def build_sector_distance_matrix(
         )
 
     tickers_by_sector: dict = {}
+    unmapped: list = []
     for t in distance.index:
-        sector = sector_map.get(t, "Unknown")
+        sector = sector_map.get(t)
+        if sector is None:
+            sector = "Unknown"
+            unmapped.append(t)
         tickers_by_sector.setdefault(sector, []).append(t)
+
+    if unmapped:
+        logger.warning(
+            f"build_sector_distance_matrix: {unmapped} missing from sector_map; "
+            "bucketed under 'Unknown'"
+        )
 
     sectors = sorted(tickers_by_sector.keys())
     sector_distance = pd.DataFrame(0.0, index=sectors, columns=sectors)
@@ -221,8 +248,18 @@ def build_semantic_zoom_network(
     ticker_mst = build_ticker_mst(distance, config)
 
     sector_members: dict = {}
+    unmapped: list = []
     for t in distance.index:
-        sector_members.setdefault(sector_map.get(t, "Unknown"), []).append(t)
+        sector = sector_map.get(t)
+        if sector is None:
+            sector = "Unknown"
+            unmapped.append(t)
+        sector_members.setdefault(sector, []).append(t)
+    if unmapped:
+        logger.warning(
+            f"build_semantic_zoom_network: {unmapped} missing from sector_map; "
+            "bucketed under 'Unknown'"
+        )
 
     sector_distance = build_sector_distance_matrix(distance, sector_map, config)
     sector_mst = build_sector_mst(sector_distance, config)
@@ -309,6 +346,28 @@ if __name__ == "__main__":
         assert set(rebuilt_corr.index) == {"A", "B", "C"}
         assert abs(rebuilt_corr.loc["A", "B"] - 0.0) < 1e-9
         print("✓ build_correlation_matrix: reconstructs from cache, excludes incomplete rows with a trace")
+
+        # Regression: a None inside an otherwise full-length correlation_row
+        # (independent review caught this — this is exactly what fetch.py
+        # produces for an unresolvable pairwise correlation, e.g. two tickers
+        # with insufficient mutual return overlap; the original check only
+        # looked at row length, so a full-length row containing a None still
+        # got treated as "complete" and later crashed nx.minimum_spanning_tree
+        # with a NaN edge weight instead of being excluded up front).
+        cache_none = UniverseCache(CacheConfig(cache_path=":memory:"))
+        cache_none.set_correlation_index(index)
+        cache_none.upsert(RankedUniverseEntry("A", "Tech", "US", 10.0, {}, [1.0, None, 0.3, 0.1], now))
+        cache_none.upsert(RankedUniverseEntry("B", "Tech", "US", 20.0, {}, [None, 1.0, 0.2, 0.15], now))
+        cache_none.upsert(RankedUniverseEntry("C", "Energy", "US", 30.0, {}, [0.3, 0.2, 1.0, 0.25], now))
+        cache_none.upsert(RankedUniverseEntry("D", "Energy", "US", 40.0, {}, [0.1, 0.15, 0.25, 1.0], now))
+
+        corr_none, excluded_none = build_correlation_matrix(cache_none)
+        assert set(excluded_none) == {"A", "B"}, excluded_none
+        assert set(corr_none.index) == {"C", "D"}
+        # Must not crash — a None-containing row must never reach MST construction
+        zoom_none = build_semantic_zoom_network(cache_none, sector_map)
+        assert set(zoom_none.ticker_network.mst.nodes()) == {"C", "D"}
+        print("✓ build_correlation_matrix: None inside a full-length row is excluded, not a crash")
 
         # ── build_semantic_zoom_network: end-to-end, two-level structure ──
         zoom = build_semantic_zoom_network(cache, sector_map)
