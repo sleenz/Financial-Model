@@ -125,19 +125,36 @@ class RankingEngine:
 
         z = (df["value"] - group_mean) / group_std
 
-        # Degenerate (zero/undefined std) is only meaningful for a KNOWN
-        # sector with no spread — e.g. a single-member sector. A missing
-        # sector also produces a NaN group_std (groupby drops NaN keys),
-        # but that must stay NaN, not get coerced to 0.0 alongside the
-        # genuinely-degenerate case — otherwise an unmapped ticker looks
-        # identical to a scored, average one.
         known_sector = aligned_sectors.notna()
-        degenerate = known_sector & ((group_std == 0) | group_std.isna())
-        degenerate_with_data = df.index[degenerate & df["value"].notna()]
-        if len(degenerate_with_data) > 0:
+        has_value = df["value"].notna()
+
+        # A ticker's own raw value being NaN must propagate to a NaN
+        # z-score regardless of its sector's variance — that's a
+        # missing-data case, not a "sector has no spread" case, and the
+        # two must never be conflated. Logged here even though the
+        # division above already yields NaN naturally, since a
+        # known-sector ticker with no value would otherwise leave zero
+        # trace that its input was missing (only surfaces below if its
+        # sector also happens to be degenerate).
+        nan_input_with_sector = known_sector & ~has_value
+        if nan_input_with_sector.any():
+            logger.warning(
+                f"compute_factor_zscore: {list(df.index[nan_input_with_sector])} have "
+                "a known sector but a missing/NaN raw factor value; z-score will be NaN"
+            )
+
+        # Degenerate (zero/undefined std) is only meaningful for a KNOWN
+        # sector with no spread — e.g. a single-member sector — AND a
+        # ticker that actually has a value to substitute a neutral score
+        # for. A missing sector also produces a NaN group_std (groupby
+        # drops NaN keys), and a missing raw value divides to NaN
+        # regardless of variance — both must stay NaN, not get coerced to
+        # 0.0 alongside the genuinely-degenerate-with-data case.
+        degenerate = known_sector & has_value & ((group_std == 0) | group_std.isna())
+        if degenerate.any():
             logger.warning(
                 f"compute_factor_zscore: zero/undefined sector std for "
-                f"{list(degenerate_with_data)}; z-score set to 0.0"
+                f"{list(df.index[degenerate])}; z-score set to 0.0"
             )
         z = z.where(~degenerate, 0.0)
         z.name = raw_factor_values.name
@@ -254,6 +271,28 @@ if __name__ == "__main__":
         z2 = engine.compute_factor_zscore(raw2, sector_map)  # D not in sector_map
         assert pd.isna(z2["D"])
         print("✓ compute_factor_zscore: ticker missing from sector_map -> NaN, not fabricated")
+
+        # Regression: a ticker's own NaN raw value inside an otherwise-degenerate
+        # sector must stay NaN, not get coerced to the degenerate-sector's 0.0.
+        # (Independent review caught this: the original fix used the broader
+        # `degenerate` mask instead of `degenerate & has_value` in the final
+        # .where(), so a missing value inside a zero-variance sector silently
+        # became a fabricated "neutral" 0.0 instead of propagating as NaN.)
+        raw3 = pd.Series({"M": 5.0, "N": 5.0, "O": float("nan")})
+        sector_map3 = {"M": "S", "N": "S", "O": "S"}  # all in the same, degenerate (std=0) sector
+        z3 = engine.compute_factor_zscore(raw3, sector_map3)
+        assert z3["M"] == 0.0 and z3["N"] == 0.0, "same-value members of a degenerate sector -> 0.0"
+        assert pd.isna(z3["O"]), "ticker's own NaN input must stay NaN even in a degenerate sector"
+        print("✓ compute_factor_zscore: NaN raw value inside a degenerate sector stays NaN, not 0.0")
+
+        # Regression: a single-member sector whose lone member has a NaN raw
+        # value must still be logged (known sector, missing value) even
+        # though it doesn't hit the "degenerate sector WITH data" warning path.
+        raw4 = pd.Series({"X": float("nan")})
+        sector_map4 = {"X": "Solo"}
+        z4 = engine.compute_factor_zscore(raw4, sector_map4)
+        assert pd.isna(z4["X"]), "single-member sector with NaN input must stay NaN"
+        print("✓ compute_factor_zscore: single-member sector with NaN input stays NaN (and is logged)")
 
         # ── compute_composite_score: hand-computable 2-stock, equal weights ──
         # D: (1.0, 0.5, -0.5, 2.0) -> 0.25*(1.0+0.5-0.5+2.0) = 0.25*3.0 = 0.75
