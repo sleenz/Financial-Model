@@ -65,6 +65,15 @@ def compute_sector_exposure(
     sector allocation rather than market share. `weights` need not sum to
     exactly 1.0 (a partially-invested portfolio is a valid caller concern,
     not this function's) — HHI is computed on whatever weights are given.
+
+    A ticker with exactly zero weight (e.g. a candidate on a watchlist
+    that hasn't actually been allocated any shares) contributes nothing
+    to HHI either way, but its sector must not still count as "present" —
+    compute_diversification_rating's N (number of sectors actually held)
+    would otherwise be inflated by unfunded tickers, and the same real
+    holdings would score differently depending on which zero-weight
+    candidates happen to also be in the caller's ticker list. Sectors
+    whose total weight is exactly 0 are dropped before returning.
     """
     unmapped = [t for t in weights.index if t not in sector_map]
     if unmapped:
@@ -75,6 +84,7 @@ def compute_sector_exposure(
 
     sectors = pd.Series({t: sector_map.get(t, "Unknown") for t in weights.index})
     sector_weights = weights.groupby(sectors).sum()
+    sector_weights = sector_weights[sector_weights > 0]
     hhi = float((sector_weights ** 2).sum())
 
     return SectorExposureResult(
@@ -346,6 +356,21 @@ if __name__ == "__main__":
         assert abs(even_exposure.hhi - 0.25) < 1e-9  # 4 * 0.25^2 = 0.25
         assert even_exposure.is_concentrated is False
         print("✓ compute_sector_exposure: evenly-spread portfolio is not flagged concentrated")
+
+        # Regression: an unfunded (zero-weight) ticker must not inflate N
+        # sectors "actually held" (independent review caught this: the same
+        # real 50/50 Tech/Health holding scored differently in the app
+        # depending on whether a zero-share watchlist ticker in another
+        # sector happened to also be present).
+        funded_weights = pd.Series({"A": 0.5, "B": 0.5, "Z": 0.0})
+        funded_sectors = {"A": "Tech", "B": "Health", "Z": "Energy"}
+        funded_exposure = compute_sector_exposure(funded_weights, funded_sectors)
+        assert "Energy" not in funded_exposure.sector_weights, (
+            "a zero-weight ticker's sector must not appear as 'held'"
+        )
+        assert set(funded_exposure.sector_weights.keys()) == {"Tech", "Health"}
+        assert abs(funded_exposure.hhi - 0.5) < 1e-9  # 0.5^2 + 0.5^2, Energy excluded
+        print("✓ compute_sector_exposure: zero-weight ticker's sector excluded from 'sectors held'")
 
         # ── compute_diversification_rating: hand-computable fusion ──────────
         # sector_score = (1-0.52)/(1-1/2) = 0.48/0.5 = 0.96

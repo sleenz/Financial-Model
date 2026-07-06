@@ -50,6 +50,13 @@ class FetchConfig:
                                             # stock_valuer's momentum/SMA-200 calcs
     min_correlation_overlap_days: int = 60  # below this, a correlation is unreliable
     dcf_wacc: float = 0.10                  # forwarded to stock_valuer.reverse_dcf
+    min_data_quality_score: float = 0.0     # multi_factor_score()'s own data_quality_score
+                                             # (n_fetched/n_attempted*100) at/below this means
+                                             # every sub-metric failed — stock_valuer catches its
+                                             # own fetch errors internally and returns a
+                                             # "successful" all-zero dict rather than raising, so
+                                             # _build_entry can't tell "genuinely scores 0" apart
+                                             # from "no data came back at all" without this check
 
 
 def _infer_market(ticker: str) -> str:
@@ -155,6 +162,24 @@ def _build_entry(ticker: str, data_layer: PortfolioDataLayer) -> RankedUniverseE
         # per-ticker try/except and run_nightly_refresh correctly count this
         # ticker as failed rather than "refreshed" with a meaningless score.
         raise RuntimeError(f"{ticker}: multi_factor_score fetch failed entirely — refusing to cache a placeholder composite_score")
+
+    # multi_factor_score() catches its own fetch errors internally (see
+    # stock_valuer.py) and returns a "successful" dict — total_score=0.0,
+    # every sub-score 0.0 — rather than raising, so mfs is never None even
+    # when literally nothing could be fetched (e.g. a delisted/unresolvable
+    # ticker). data_quality_score (n_fetched/n_attempted*100) is the only
+    # signal that distinguishes "genuinely scores 0" from "no data came
+    # back at all" — without this check, a total data outage silently
+    # produces a plausible-looking, positively-scored entry instead of a
+    # visible failure (independent review caught this reaching the UI).
+    data_quality = mfs.get("data_quality_score", 0.0)
+    if data_quality <= data_layer.config.min_data_quality_score:
+        raise RuntimeError(
+            f"{ticker}: multi_factor_score returned data_quality_score={data_quality} "
+            f"(<= min_data_quality_score={data_layer.config.min_data_quality_score}) — "
+            "treating as a total fetch failure, not a genuine zero score"
+        )
+
     dcf = fundamentals.get("dcf") or {}
 
     composite_score = _safe_numeric(mfs.get("total_score", 0.0), ticker, "total_score")
@@ -309,6 +334,7 @@ if __name__ == "__main__":
                         "momentum_score": 14.0,
                         "growth_score": 10.0,
                         "health_score": 8.0,
+                        "data_quality_score": 100.0,
                         "warnings": [],
                     },
                     "dcf": {"implied_growth_rate": 0.08, "growth_premium": 0.02, "warnings": None},
@@ -357,7 +383,8 @@ if __name__ == "__main__":
                 return {
                     "multi_factor": {"total_score": float("nan"), "quality_score": 0.0,
                                       "value_score": 0.0, "momentum_score": 0.0,
-                                      "growth_score": 0.0, "health_score": 0.0, "warnings": []},
+                                      "growth_score": 0.0, "health_score": 0.0,
+                                      "data_quality_score": 100.0, "warnings": []},
                     "dcf": {"implied_growth_rate": None, "growth_premium": None, "warnings": None},
                     "warnings": [],
                 }
@@ -368,6 +395,30 @@ if __name__ == "__main__":
         except RuntimeError:
             pass
         print("✓ NaN composite_score raises instead of corrupting the cache")
+
+        # Regression: multi_factor_score() "succeeding" with data_quality_score=0
+        # (every sub-metric failed internally, e.g. a delisted/unresolvable
+        # ticker with yfinance down) must be treated as a total failure, not
+        # cached as a genuine, plausible-looking zero score. Independent
+        # review caught this reaching the UI as a positively-badged,
+        # fabricated entry with zero warnings shown anywhere.
+        class _ZeroDataQualityLayer(_MockDataLayer):
+            def fetch_fundamentals(self, ticker):
+                return {
+                    "multi_factor": {"total_score": 0.0, "quality_score": 0.0,
+                                      "value_score": 0.0, "momentum_score": 0.0,
+                                      "growth_score": 0.0, "health_score": 0.0,
+                                      "data_quality_score": 0.0, "warnings": []},
+                    "dcf": {"implied_growth_rate": None, "growth_premium": None, "warnings": None},
+                    "warnings": [],
+                }
+
+        try:
+            _build_entry("ZZZZ", _ZeroDataQualityLayer())
+            raise AssertionError("expected RuntimeError on data_quality_score=0")
+        except RuntimeError:
+            pass
+        print("✓ data_quality_score=0 raises instead of caching a fabricated zero score")
 
         cache = UniverseCache(CacheConfig(cache_path=":memory:"))
         fetcher = OnDemandFetcher(cache, mock_layer)

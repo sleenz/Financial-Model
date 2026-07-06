@@ -72,6 +72,23 @@ if "pb_tickers" not in st.session_state:
     st.session_state.pb_tickers = []
 if "pb_shares" not in st.session_state:
     st.session_state.pb_shares = {}
+if "pb_shares_baseline" not in st.session_state:
+    # Separate from pb_shares on purpose (real bug found + fixed in this
+    # session): feeding pb_shares — which the data_editor's own output
+    # updates every rerun via the sync-back loop below — back into that
+    # SAME editor's `data=` argument creates a moving-baseline feedback
+    # loop. Streamlit's data_editor only correctly accumulates edits
+    # across reruns (via its `key`) when the `data=` it's given stays
+    # stable; once the baseline itself starts reflecting the previous
+    # edit, only the FIRST edit in a session ever registers — every
+    # subsequent edit to any row is silently dropped (confirmed via
+    # st.session_state["pb_ranked_editor"]["edited_rows"] staying `{}`
+    # after the second edit, regardless of interaction method: mouse,
+    # keyboard, or a different row each time). pb_shares_baseline is set
+    # ONCE per ticker (on add, seeded from any remembered value) and never
+    # touched by the sync-back loop, so the editor's `data=` argument
+    # never moves out from under it and every edit registers correctly.
+    st.session_state.pb_shares_baseline = {}
 if "pb_backend_cache" not in st.session_state:
     st.session_state.pb_backend_cache = {}
 if "pb_backend_call_count" not in st.session_state:
@@ -155,6 +172,10 @@ def _add_ticker_callback() -> None:
     if t and t not in st.session_state.pb_tickers:
         st.session_state.pb_tickers.append(t)
         st.session_state.pb_shares.setdefault(t, 0)
+        # Seed the editor's stable baseline from any remembered share count
+        # (e.g. this ticker was removed and is now being re-added) — set
+        # once here, never touched again while the ticker stays in the set.
+        st.session_state.pb_shares_baseline[t] = st.session_state.pb_shares[t]
     st.session_state.pb_new_ticker_input = ""
 
 
@@ -182,6 +203,7 @@ if st.session_state.pb_tickers:
             if st.button(f"{t}  ✕", key=f"pb_remove_{t}"):
                 st.session_state.pb_tickers.remove(t)
                 st.session_state.pb_shares.pop(t, None)
+                st.session_state.pb_shares_baseline.pop(t, None)
                 st.rerun()
 else:
     st.caption("No tickers yet — add some above.")
@@ -214,7 +236,10 @@ else:
             "Ticker": t,
             "Sector": e.sector,
             "Score": _heat_label(t),
-            "Shares": int(st.session_state.pb_shares.get(t, 0)),
+            # pb_shares_baseline, NOT pb_shares — see the session-state
+            # init comment above for why feeding the constantly-updated
+            # pb_shares back in here breaks the editor after one edit.
+            "Shares": int(st.session_state.pb_shares_baseline.get(t, 0)),
         })
     ranked_df = pd.DataFrame(rows).set_index("Ticker")
 
@@ -229,8 +254,11 @@ else:
         key="pb_ranked_editor",
     )
 
-    # Sync edited share counts back into session_state — pure arithmetic
-    # from here on, no backend call is triggered by this.
+    # Sync edited share counts back into session_state (for % weight and
+    # the metrics panel below) — pure arithmetic from here on, no backend
+    # call is triggered by this. Deliberately NOT written back into
+    # ranked_df/pb_shares_baseline above — see the session-state init
+    # comment for why that would break the editor after the first edit.
     for t in edited_df.index:
         st.session_state.pb_shares[t] = int(edited_df.loc[t, "Shares"])
 
