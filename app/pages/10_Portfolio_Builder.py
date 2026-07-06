@@ -250,6 +250,27 @@ else:
         emoji = "🟢" if p >= 0.67 else ("🟡" if p >= 0.33 else "🔴")
         return f"{emoji} {scores[t]:.1f}"
 
+    # Streamlit garbage-collects a keyed widget's internal state
+    # (st.session_state["pb_ranked_editor"]["edited_rows"]) whenever that
+    # widget isn't rendered on a script run — which happens every time the
+    # user navigates to a different page, since this page's script (and
+    # therefore this data_editor call) doesn't run at all while another
+    # page is showing. Coming back re-creates the widget with an empty
+    # diff, and since ranked_df's baseline is deliberately frozen in
+    # pb_shares_baseline (see above — required so the earlier multi-edit
+    # bug fix holds), the freshly-recreated widget showed 0 shares,
+    # discarding everything the user had entered (reported bug). Only
+    # refresh the baseline from the authoritative pb_shares when there is
+    # no live in-widget diff to protect — this is exactly the case where
+    # the widget has just been (re)created with nothing pending, whether
+    # that's a genuinely first-ever render or a post-navigation one. While
+    # edits are actively accumulating within a single visit, edited_rows
+    # stays non-empty, so this never fires and the original fix's
+    # protection against a moving baseline still holds.
+    if not st.session_state.get("pb_ranked_editor", {}).get("edited_rows"):
+        for t in entries:
+            st.session_state.pb_shares_baseline[t] = st.session_state.pb_shares.get(t, 0)
+
     prices = backend.get("prices", pd.Series(dtype=float))
     rows = []
     for t, e in entries.items():
