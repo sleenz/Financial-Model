@@ -641,7 +641,7 @@ if _dcf_map:
         return _VERDICT_BG.get(val, "")
 
     st.dataframe(
-        _dcf_table.style.applymap(_style_verdict_col, subset=["Verdict"]),
+        _dcf_table.style.map(_style_verdict_col, subset=["Verdict"]),
         width="stretch",
     )
 
@@ -692,7 +692,7 @@ with st.expander("Score Breakdown per Sub-factor (detail)", expanded=False):
             return ""
 
         st.dataframe(
-            _bd_df.style.applymap(_highlight_none),
+            _bd_df.style.map(_highlight_none),
             width="stretch",
         )
         st.caption(
