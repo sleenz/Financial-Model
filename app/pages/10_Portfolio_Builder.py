@@ -40,10 +40,12 @@ from src.portfolio_builder.metrics import (
     render_mixed_period_disclosure,
 )
 from src.portfolio_builder.network import (
+    CorrelationNetworkConfig,
     NetworkStyleConfig,
     build_semantic_zoom_network,
     correlation_from_distance,
     edge_style_for_correlation,
+    filter_edges_by_threshold,
     get_sector_subgraph,
     node_color_for_percentile,
 )
@@ -56,6 +58,11 @@ st.title("Portfolio Builder")
 # explicitly — see metrics.py docstring: FRED is broken upstream, and
 # compute_sharpe() refuses to silently default this to 0.0). ──────────────
 _MANUAL_RISK_FREE_RATE = 0.045  # update periodically until FRED is fixed
+
+# ── Correlation network edge-filter defaults — threshold is only the
+# slider's INITIAL value below; the widget's own state drives every
+# subsequent rerun (see the Correlation Network section). ────────────────
+_CORRELATION_NETWORK_CONFIG = CorrelationNetworkConfig()
 
 
 # ── Cached resources (survive reruns within a session — not reopened per
@@ -334,16 +341,40 @@ if not backend or "zoom" not in backend:
 else:
     zoom = backend["zoom"]
     sector_options = ["(sector overview)"] + sorted(zoom.sector_network.sector_members.keys())
-    selected = st.selectbox("Zoom into a sector", sector_options, key="pb_network_zoom")
+
+    slider_col, zoom_col = st.columns(2)
+    with slider_col:
+        # Purely a rendering filter over the already-cached zoom object below
+        # (keyed by ticker set — see _get_backend_data) — moving this slider
+        # never re-fetches data, re-runs HRP's .corr(), or rebuilds the MST.
+        threshold = st.slider(
+            "Correlation threshold (additional edges beyond the MST)",
+            min_value=-1.0, max_value=1.0,
+            value=_CORRELATION_NETWORK_CONFIG.threshold, step=0.05,
+            key="pb_corr_threshold",
+        )
+    with zoom_col:
+        selected = st.selectbox("Zoom into a sector", sector_options, key="pb_network_zoom")
+
+    edge_filter_config = CorrelationNetworkConfig(
+        always_include_mst=_CORRELATION_NETWORK_CONFIG.always_include_mst,
+        threshold=threshold,
+        threshold_is_percentile=_CORRELATION_NETWORK_CONFIG.threshold_is_percentile,
+    )
 
     if selected == "(sector overview)":
-        graph = zoom.sector_network.mst
+        mst_source = zoom.sector_network.mst
+        distance_source = zoom.sector_network.distance_matrix
         title = "Sector overview (default zoom)"
         node_basis = "sector"
     else:
-        graph = get_sector_subgraph(zoom.ticker_network, zoom.sector_network.sector_members, selected)
+        members = zoom.sector_network.sector_members.get(selected, [])
+        mst_source = get_sector_subgraph(zoom.ticker_network, zoom.sector_network.sector_members, selected)
+        distance_source = zoom.ticker_network.distance_matrix.loc[members, members]
         title = f"{selected} — ticker detail (zoomed in)"
         node_basis = "ticker"
+
+    graph = filter_edges_by_threshold(distance_source, mst_source, edge_filter_config)
 
     if graph.number_of_nodes() == 0:
         st.info("No nodes to display for this view.")
@@ -420,7 +451,10 @@ else:
         st.caption(
             "The network is a minimum spanning tree built on the Mantegna "
             "distance transform of ticker-level correlation — shorter, "
-            "more-opaque edges connect more correlated tickers."
+            "more-opaque edges connect more correlated tickers. MST edges "
+            "are always shown regardless of the slider above, which only "
+            "adds or removes additional edges whose correlation strength "
+            "clears the chosen threshold."
         )
 
     if zoom.ticker_network.excluded_tickers:
