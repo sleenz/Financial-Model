@@ -1,8 +1,14 @@
 """
-Mixed-period Sharpe estimate for the Portfolio Builder — DISPLAY ONLY.
+Portfolio metrics for the Portfolio Builder — DISPLAY ONLY.
+
+Two independent metric groups live here:
+
+1. Sector exposure (HHI) + diversification rating — concentration risk,
+   fusing sector spread with the Phase 3 correlation network's structure.
+2. Mixed-period Sharpe estimate — see below.
 
 Per explicit instruction (refining the original Phase 4 spec): the return
-leg and volatility leg of this Sharpe estimate come from two different
+leg and volatility leg of the Sharpe estimate come from two different
 reference periods, and that mismatch is disclosed in the UI rather than
 papered over:
 
@@ -34,6 +40,102 @@ import pandas as pd
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class DiversificationConfig:
+    hhi_warning_threshold: float = 0.40  # HHI at/above this triggers a sector-concentration warning
+
+
+@dataclass
+class SectorExposureResult:
+    sector_weights: dict   # {sector: total portfolio weight}
+    hhi: float
+    is_concentrated: bool  # hhi >= config.hhi_warning_threshold
+
+
+def compute_sector_exposure(
+    weights: pd.Series,
+    sector_map: dict,
+    config: DiversificationConfig = DiversificationConfig(),
+) -> SectorExposureResult:
+    """
+    HHI = sum(sector_weight_i^2) over sectors present in the portfolio —
+    the standard Herfindahl-Hirschman concentration index, applied to
+    sector allocation rather than market share. `weights` need not sum to
+    exactly 1.0 (a partially-invested portfolio is a valid caller concern,
+    not this function's) — HHI is computed on whatever weights are given.
+    """
+    unmapped = [t for t in weights.index if t not in sector_map]
+    if unmapped:
+        logger.warning(
+            f"compute_sector_exposure: {unmapped} missing from sector_map; "
+            "bucketed under 'Unknown'"
+        )
+
+    sectors = pd.Series({t: sector_map.get(t, "Unknown") for t in weights.index})
+    sector_weights = weights.groupby(sectors).sum()
+    hhi = float((sector_weights ** 2).sum())
+
+    return SectorExposureResult(
+        sector_weights=sector_weights.to_dict(),
+        hhi=hhi,
+        is_concentrated=hhi >= config.hhi_warning_threshold,
+    )
+
+
+def compute_diversification_rating(sector_exposure: SectorExposureResult, ticker_mst) -> float:
+    """
+    Diversification rating on 0-100, fusing two independently-normalized
+    [0,1] sub-scores via their GEOMETRIC mean — deliberately not an
+    arithmetic mean, so a portfolio strong on one axis (e.g. spread across
+    many sectors) but weak on the other (e.g. every ticker highly
+    correlated with every other) can't get a misleadingly high blended
+    score: either sub-score at 0 forces the rating to 0.
+
+    1. Sector-spread sub-score: (1 - HHI) / (1 - 1/N), N = number of
+       distinct sectors actually held. Rescales HHI's effective-N concept
+       (N_eff = 1/HHI) onto [0,1]: 0 when fully concentrated in one
+       sector, 1 when equally spread across all N held sectors.
+       Source: Woerheide, W., & Persson, D. (1993). "An Index of
+       Portfolio Diversification." Financial Services Review, 2(2),
+       73-85 — proposes a Herfindahl-based index for portfolio
+       diversification measurement.
+
+    2. Correlation-density sub-score: mean Mantegna MST edge distance
+       (from network.py's ticker-level MST — reused, not recomputed)
+       divided by 2.0, the maximum possible Mantegna distance
+       (d = sqrt(2(1-rho)), rho in [-1,1]). A "dense" network (tickers
+       all tightly correlated) has short average MST edges and scores
+       near 0; a network of largely independent tickers scores near 1.
+       Source: Onnela, J.-P., Chakraborti, A., Kaski, K., Kertész, J., &
+       Kanto, A. (2003). "Dynamics of market correlations: Taxonomy and
+       portfolio analysis." Physical Review E, 68(5), 056110 — studies
+       MST tree structure/length as a proxy for market correlation
+       structure.
+
+    `ticker_mst` is the networkx.Graph from network.TickerNetwork.mst —
+    a graph with zero edges (e.g. a single-ticker portfolio) yields a
+    correlation-density sub-score of 0.0 (no structure to measure), not
+    an error, since "no diversification benefit measurable" is the
+    honest answer for a one-asset portfolio.
+    """
+    n_sectors = len(sector_exposure.sector_weights)
+    if n_sectors <= 1:
+        sector_score = 0.0
+    else:
+        raw = (1.0 - sector_exposure.hhi) / (1.0 - 1.0 / n_sectors)
+        sector_score = max(0.0, min(1.0, raw))
+
+    edge_weights = [data["weight"] for _, _, data in ticker_mst.edges(data=True)]
+    if not edge_weights:
+        correlation_score = 0.0
+    else:
+        avg_distance = sum(edge_weights) / len(edge_weights)
+        correlation_score = max(0.0, min(1.0, avg_distance / 2.0))
+
+    rating = 100.0 * np.sqrt(sector_score * correlation_score)
+    return float(rating)
 
 
 @dataclass
@@ -205,13 +307,76 @@ def render_mixed_period_disclosure() -> None:
 
 if __name__ == "__main__":
     def _smoke_test():
+        import networkx as nx
+
         from src.portfolio_builder.metrics import (
+            DiversificationConfig,
+            SectorExposureResult,
             SharpeConfig,
             compute_dcc_garch_volatility_current,
+            compute_diversification_rating,
             compute_realized_return,
+            compute_sector_exposure,
             compute_sharpe,
             render_mixed_period_disclosure,
         )
+
+        # ── compute_sector_exposure: hand-computable 3-ticker, 2-sector set ──
+        # Tech = A(0.3)+B(0.3) = 0.6, Energy = C(0.4) -> HHI = 0.6^2+0.4^2 = 0.52
+        weights = pd.Series({"A": 0.3, "B": 0.3, "C": 0.4})
+        sector_map = {"A": "Tech", "B": "Tech", "C": "Energy"}
+        exposure = compute_sector_exposure(weights, sector_map)
+        assert abs(exposure.sector_weights["Tech"] - 0.6) < 1e-9
+        assert abs(exposure.sector_weights["Energy"] - 0.4) < 1e-9
+        assert abs(exposure.hhi - 0.52) < 1e-9, exposure.hhi
+        assert exposure.is_concentrated is True, "0.52 >= default 0.40 threshold"
+        print("✓ compute_sector_exposure: HHI matches hand calc, concentration flag correct")
+
+        # Ticker missing from sector_map -> bucketed under Unknown, not dropped
+        weights_gap = pd.Series({"A": 0.5, "Z": 0.5})
+        exposure_gap = compute_sector_exposure(weights_gap, {"A": "Tech"})
+        assert "Unknown" in exposure_gap.sector_weights
+        assert abs(exposure_gap.sector_weights["Unknown"] - 0.5) < 1e-9
+        print("✓ compute_sector_exposure: unmapped ticker bucketed under Unknown, not dropped")
+
+        # Below the concentration threshold
+        even_weights = pd.Series({"A": 0.25, "B": 0.25, "C": 0.25, "D": 0.25})
+        even_sectors = {"A": "S1", "B": "S2", "C": "S3", "D": "S4"}
+        even_exposure = compute_sector_exposure(even_weights, even_sectors)
+        assert abs(even_exposure.hhi - 0.25) < 1e-9  # 4 * 0.25^2 = 0.25
+        assert even_exposure.is_concentrated is False
+        print("✓ compute_sector_exposure: evenly-spread portfolio is not flagged concentrated")
+
+        # ── compute_diversification_rating: hand-computable fusion ──────────
+        # sector_score = (1-0.52)/(1-1/2) = 0.48/0.5 = 0.96
+        # MST with edges 0.8 and 1.2 -> avg distance 1.0 -> correlation_score = 0.5
+        # rating = 100 * sqrt(0.96 * 0.5) = 100 * sqrt(0.48)
+        mst = nx.Graph()
+        mst.add_edge("A", "B", weight=0.8)
+        mst.add_edge("B", "C", weight=1.2)
+        rating = compute_diversification_rating(exposure, mst)
+        expected_rating = 100.0 * np.sqrt(0.96 * 0.5)
+        assert abs(rating - expected_rating) < 1e-9, (rating, expected_rating)
+        print("✓ compute_diversification_rating: matches hand-computed geometric-mean fusion")
+
+        # Single sector -> sector_score forced to 0 -> rating 0 regardless of correlation structure
+        one_sector_exposure = SectorExposureResult(sector_weights={"Tech": 1.0}, hhi=1.0, is_concentrated=True)
+        rating_one_sector = compute_diversification_rating(one_sector_exposure, mst)
+        assert rating_one_sector == 0.0
+        print("✓ compute_diversification_rating: single-sector portfolio -> rating 0.0")
+
+        # No MST edges (single-ticker portfolio) -> correlation_score 0 -> rating 0, not an error
+        empty_mst = nx.Graph()
+        empty_mst.add_node("A")
+        rating_no_edges = compute_diversification_rating(exposure, empty_mst)
+        assert rating_no_edges == 0.0
+        print("✓ compute_diversification_rating: no MST edges -> rating 0.0, not an error")
+
+        # DiversificationConfig threshold is overridable
+        strict_config = DiversificationConfig(hhi_warning_threshold=0.90)
+        lenient_exposure = compute_sector_exposure(weights, sector_map, strict_config)
+        assert lenient_exposure.is_concentrated is False, "0.52 < overridden 0.90 threshold"
+        print("✓ DiversificationConfig.hhi_warning_threshold is overridable")
 
         # ── compute_realized_return: hand-computable constant-return series ──
         # 252 days of a constant 0.0005 daily return -> cumulative = 1.0005^252 - 1
