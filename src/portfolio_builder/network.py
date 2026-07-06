@@ -235,6 +235,69 @@ def get_sector_subgraph(ticker_network: TickerNetwork, sector_members: dict, sec
     return ticker_network.mst.subgraph(members).copy()
 
 
+def correlation_from_distance(distance: float) -> float:
+    """Exact inverse of the Mantegna transform above: d = sqrt(2*(1-rho))
+    => rho = 1 - d^2/2. Recovers the underlying correlation for an MST edge
+    from its stored distance weight, so callers that need the correlation
+    (e.g. to color/shade an edge by correlation strength) don't have to
+    carry a second parallel matrix through TickerNetwork/SectorNetwork.
+    Same fixed-mathematical-definition treatment as compute_distance_matrix
+    itself — not a tunable business parameter, so no config argument."""
+    return 1.0 - (distance ** 2) / 2.0
+
+
+@dataclass
+class NetworkStyleConfig:
+    """Visual-encoding constants for rendering the correlation network.
+    Figure/layout construction itself is a rendering concern (stays in the
+    page, per this module's docstring above) — this dataclass only owns
+    the NUMBERS and color tokens that turn domain values (correlation,
+    rank percentile) into visuals, so a fix for "hardcoded colors/opacity
+    in the page" is an auditable config field, not a bare literal.
+
+    Edge opacity = edge_opacity_floor + edge_opacity_range * max(0, rho) —
+    continuous in correlation strength, not a binary on/off. Color tokens
+    below are the app's existing palette (edge_color_positive/negative
+    reuse app/pages/2_Optimization.py's "coral"/"steelblue"; node tier
+    colors reuse app/pages/4_Stress_Testing.py's low/warning/critical
+    green/orange/red), not new colors invented for this feature.
+    """
+    edge_opacity_floor: float = 0.15
+    edge_opacity_range: float = 0.60
+    edge_color_positive: str = "coral"
+    edge_color_negative: str = "steelblue"
+    node_color_top: str = "green"
+    node_color_mid: str = "orange"
+    node_color_bottom: str = "red"
+    tier_top_percentile: float = 0.67    # matches the Ranked List's own 🟢 threshold
+    tier_bottom_percentile: float = 0.33  # matches the Ranked List's own 🔴 threshold
+
+
+def edge_style_for_correlation(
+    correlation: float, config: NetworkStyleConfig = NetworkStyleConfig()
+) -> tuple:
+    """(color, opacity) for one MST edge, continuous in correlation strength
+    rather than a fixed single color/width for every edge. Any non-positive
+    correlation gets the floor opacity and the muted token — the sign is
+    what flips the token, not the magnitude of a negative value."""
+    opacity = config.edge_opacity_floor + config.edge_opacity_range * max(0.0, correlation)
+    color = config.edge_color_positive if correlation > 0 else config.edge_color_negative
+    return color, float(opacity)
+
+
+def node_color_for_percentile(
+    percentile: float, config: NetworkStyleConfig = NetworkStyleConfig()
+) -> str:
+    """Rank-tier node color, same tri-tier convention (top/middle/bottom
+    third) as the Ranked List's heat emoji, so a ticker's node color and
+    its ranked-list emoji always agree."""
+    if percentile >= config.tier_top_percentile:
+        return config.node_color_top
+    if percentile >= config.tier_bottom_percentile:
+        return config.node_color_mid
+    return config.node_color_bottom
+
+
 def build_semantic_zoom_network(
     cache: UniverseCache,
     sector_map: dict,
@@ -447,6 +510,41 @@ if __name__ == "__main__":
         assert set(partial_zoom.ticker_network.mst.nodes()) == {"A", "B", "C"}
         assert partial_zoom.ticker_network.excluded_tickers == ["E"]
         print("✓ build_semantic_zoom_network: ticker missing from supplied correlation is excluded, not dropped silently")
+
+        # ── correlation_from_distance: exact inverse of the Mantegna transform ──
+        from src.portfolio_builder.network import (
+            NetworkStyleConfig,
+            edge_style_for_correlation,
+            node_color_for_percentile,
+        )
+
+        for rho in [1.0, 0.5, 0.0, -0.5, -1.0]:
+            d = float(np.sqrt(2.0 * (1.0 - rho)))
+            assert abs(correlation_from_distance(d) - rho) < 1e-9, (rho, d)
+        print("✓ correlation_from_distance: exact inverse of compute_distance_matrix's transform")
+
+        # ── edge_style_for_correlation: continuous opacity, correct color token ──
+        style = NetworkStyleConfig()
+        color_hi, opacity_hi = edge_style_for_correlation(1.0, style)
+        color_zero, opacity_zero = edge_style_for_correlation(0.0, style)
+        color_neg, opacity_neg = edge_style_for_correlation(-0.8, style)
+        assert color_hi == style.edge_color_positive
+        assert abs(opacity_hi - (style.edge_opacity_floor + style.edge_opacity_range)) < 1e-9
+        assert color_zero == style.edge_color_negative
+        assert abs(opacity_zero - style.edge_opacity_floor) < 1e-9
+        assert color_neg == style.edge_color_negative
+        # negative correlation clamped to the same floor as zero (max(0, rho))
+        assert abs(opacity_neg - style.edge_opacity_floor) < 1e-9
+        print("✓ edge_style_for_correlation: continuous opacity scaling, floor clamp on non-positive rho")
+
+        # ── node_color_for_percentile: matches Ranked List's tri-tier thresholds ──
+        assert node_color_for_percentile(0.9, style) == style.node_color_top
+        assert node_color_for_percentile(0.5, style) == style.node_color_mid
+        assert node_color_for_percentile(0.1, style) == style.node_color_bottom
+        # boundary values are inclusive on the upper tier, per >= comparisons above
+        assert node_color_for_percentile(0.67, style) == style.node_color_top
+        assert node_color_for_percentile(0.33, style) == style.node_color_mid
+        print("✓ node_color_for_percentile: tri-tier thresholds match Ranked List's own 🟢🟡🔴 cutoffs")
 
         print("✓ network.py smoke test passed")
 

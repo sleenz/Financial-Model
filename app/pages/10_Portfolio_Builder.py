@@ -30,6 +30,7 @@ from src.data.data_manager import DataManager
 from src.portfolio_builder.cache import CacheConfig, UniverseCache
 from src.portfolio_builder.fetch import FetchConfig, OnDemandFetcher, PortfolioDataLayer
 from src.portfolio_builder.metrics import (
+    DiversificationConfig,
     SharpeConfig,
     compute_dcc_garch_volatility_current,
     compute_diversification_rating,
@@ -38,7 +39,14 @@ from src.portfolio_builder.metrics import (
     compute_sharpe,
     render_mixed_period_disclosure,
 )
-from src.portfolio_builder.network import build_semantic_zoom_network, get_sector_subgraph
+from src.portfolio_builder.network import (
+    NetworkStyleConfig,
+    build_semantic_zoom_network,
+    correlation_from_distance,
+    edge_style_for_correlation,
+    get_sector_subgraph,
+    node_color_for_percentile,
+)
 from src.risk.dcc_garch import DCCGARCHConfig, DCCGARCHModel
 
 st.set_page_config(page_title="Portfolio Builder", layout="wide")
@@ -331,36 +339,89 @@ else:
     if selected == "(sector overview)":
         graph = zoom.sector_network.mst
         title = "Sector overview (default zoom)"
+        node_basis = "sector"
     else:
         graph = get_sector_subgraph(zoom.ticker_network, zoom.sector_network.sector_members, selected)
         title = f"{selected} — ticker detail (zoomed in)"
+        node_basis = "ticker"
 
     if graph.number_of_nodes() == 0:
         st.info("No nodes to display for this view.")
     else:
         import networkx as nx
 
+        style_config = NetworkStyleConfig()
+
+        # Node color by rank tier — same composite_score percentile basis as
+        # the Ranked List's heat emoji above, so a ticker's node color and
+        # its ranked-list emoji always agree. In sector-overview mode there's
+        # no per-sector composite_score, so sectors are ranked against each
+        # other by their members' mean score instead.
+        composite_scores = pd.Series({t: e.composite_score for t, e in backend["entries"].items()})
+        if node_basis == "ticker":
+            node_scores = composite_scores
+        else:
+            node_scores = composite_scores.groupby(pd.Series(backend["sector_map"])).mean()
+        node_percentile = (
+            node_scores.rank(pct=True) if len(node_scores) > 1 else pd.Series(1.0, index=node_scores.index)
+        )
+
         pos = nx.spring_layout(graph, seed=42)
-        edge_x, edge_y = [], []
-        for u, v in graph.edges():
+
+        edge_traces = []
+        for u, v, data in graph.edges(data=True):
             x0, y0 = pos[u]
             x1, y1 = pos[v]
-            edge_x += [x0, x1, None]
-            edge_y += [y0, y1, None]
-        edge_trace = go.Scatter(x=edge_x, y=edge_y, mode="lines", line=dict(width=1, color="#999"), hoverinfo="none")
+            corr = correlation_from_distance(data["weight"])
+            color, opacity = edge_style_for_correlation(corr, style_config)
+            edge_traces.append(go.Scatter(
+                x=[x0, x1], y=[y0, y1], mode="lines",
+                line=dict(width=3, color=color), opacity=opacity,
+                hoverinfo="text", text=f"{u} – {v}: correlation {corr:.2f}",
+                showlegend=False,
+            ))
+
+        node_colors = [
+            node_color_for_percentile(node_percentile.get(n, 1.0), style_config)
+            for n in graph.nodes()
+        ]
         node_x = [pos[n][0] for n in graph.nodes()]
         node_y = [pos[n][1] for n in graph.nodes()]
         node_trace = go.Scatter(
             x=node_x, y=node_y, mode="markers+text", text=list(graph.nodes()),
-            textposition="top center", marker=dict(size=20, color="#4C78A8"), hoverinfo="text",
+            textposition="top center", marker=dict(size=20, color=node_colors),
+            hoverinfo="text", showlegend=False,
         )
-        fig = go.Figure(data=[edge_trace, node_trace])
+        fig = go.Figure(data=edge_traces + [node_trace])
         fig.update_layout(
             title=title, showlegend=False, margin=dict(l=10, r=10, t=40, b=10),
             xaxis=dict(showgrid=False, zeroline=False, visible=False),
             yaxis=dict(showgrid=False, zeroline=False, visible=False),
         )
         st.plotly_chart(fig, use_container_width=True)
+
+        legend_col1, legend_col2 = st.columns(2)
+        with legend_col1:
+            st.markdown(
+                "**Node color — rank tier**<br>"
+                f"<span style='color:{style_config.node_color_top}'>●</span> Top third&nbsp;&nbsp;"
+                f"<span style='color:{style_config.node_color_mid}'>●</span> Middle third&nbsp;&nbsp;"
+                f"<span style='color:{style_config.node_color_bottom}'>●</span> Bottom third",
+                unsafe_allow_html=True,
+            )
+        with legend_col2:
+            st.markdown(
+                "**Edge color/opacity — correlation strength**<br>"
+                f"<span style='color:{style_config.edge_color_negative}'>▬</span> weak/negative"
+                "&nbsp;→&nbsp;"
+                f"<span style='color:{style_config.edge_color_positive}'>▬</span> strong positive",
+                unsafe_allow_html=True,
+            )
+        st.caption(
+            "The network is a minimum spanning tree built on the Mantegna "
+            "distance transform of ticker-level correlation — shorter, "
+            "more-opaque edges connect more correlated tickers."
+        )
 
     if zoom.ticker_network.excluded_tickers:
         st.caption(f"Excluded from the network (incomplete cached correlation data): {zoom.ticker_network.excluded_tickers}")
@@ -382,13 +443,23 @@ else:
         st.caption("Enter share counts in the ranked list above to see portfolio metrics.")
     else:
         weights = values / total_value
-        sector_exposure = compute_sector_exposure(weights, backend["sector_map"])
+        diversification_config = DiversificationConfig()
+        sector_exposure = compute_sector_exposure(weights, backend["sector_map"], diversification_config)
+
+        st.markdown("**Sector Exposure**")
+        sector_weight_pct = (
+            pd.Series(sector_exposure.sector_weights).sort_values(ascending=False) * 100
+        ).rename("Weight (%)")
+        st.bar_chart(sector_weight_pct)
 
         col1, col2 = st.columns(2)
         with col1:
             st.metric("Sector HHI", f"{sector_exposure.hhi:.3f}")
             if sector_exposure.is_concentrated:
-                st.warning(f"Sector concentration warning — HHI {sector_exposure.hhi:.3f} is at/above the 0.40 threshold.")
+                st.warning(
+                    f"Sector concentration warning — HHI {sector_exposure.hhi:.3f} is "
+                    f"at/above the {diversification_config.hhi_warning_threshold:.0%} threshold."
+                )
         with col2:
             if "zoom" in backend:
                 rating = compute_diversification_rating(sector_exposure, backend["zoom"].ticker_network.mst)
