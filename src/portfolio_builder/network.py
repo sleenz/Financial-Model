@@ -240,10 +240,38 @@ def build_semantic_zoom_network(
     sector_map: dict,
     tickers: Optional[list] = None,
     config: NetworkConfig = NetworkConfig(),
+    correlation: Optional[pd.DataFrame] = None,
 ) -> SemanticZoomNetwork:
-    """Full pipeline: cached correlation_row values -> distance transform ->
-    ticker-level MST (detail) + sector-level MST (default-zoom overview)."""
-    correlation, excluded = build_correlation_matrix(cache, tickers, config)
+    """Full pipeline: correlation matrix -> distance transform -> ticker-level
+    MST (detail) + sector-level MST (default-zoom overview).
+
+    correlation: if given, used directly instead of reading UniverseCache's
+    cached correlation_row values via build_correlation_matrix(). This
+    matters because OnDemandFetcher.get_or_fetch() always leaves a fresh
+    ticker's correlation_row empty (deferred to the next
+    run_nightly_refresh() — see fetch.py) — with no nightly job actually
+    scheduled in a given deployment, every first-time ticker would
+    otherwise be excluded here, and a cold cache means build_correlation_matrix
+    raises "no tickers had usable correlation data" for every new user.
+    Passing an already-computed correlation matrix (e.g. from price data a
+    caller already fetched for another purpose) sidesteps that entirely.
+    Must be a ticker x ticker DataFrame; tickers requested but absent from
+    its index/columns are reported via TickerNetwork.excluded_tickers,
+    same as build_correlation_matrix's own exclusion contract.
+    """
+    if correlation is not None:
+        universe = tickers if tickers is not None else list(correlation.index)
+        kept = [t for t in universe if t in correlation.index and t in correlation.columns]
+        excluded = [t for t in universe if t not in kept]
+        if excluded:
+            logger.warning(
+                f"build_semantic_zoom_network: excluded {excluded} (not present "
+                "in the supplied correlation matrix)"
+            )
+        correlation = correlation.loc[kept, kept]
+    else:
+        correlation, excluded = build_correlation_matrix(cache, tickers, config)
+
     distance = compute_distance_matrix(correlation)
     ticker_mst = build_ticker_mst(distance, config)
 
@@ -376,6 +404,49 @@ if __name__ == "__main__":
         assert set(zoom.ticker_network.mst.nodes()) == {"A", "B", "C"}
         assert zoom.ticker_network.excluded_tickers == ["D"]
         print("✓ build_semantic_zoom_network: end-to-end sector + ticker level MSTs built")
+
+        # Regression: a COLD cache (every ticker just on-demand-fetched, so
+        # every correlation_row is empty per fetch.py's OnDemandFetcher
+        # contract) must not make the network entirely unusable. This is
+        # exactly what happened in production: with no nightly refresh job
+        # actually scheduled, build_correlation_matrix excluded every
+        # first-time ticker and raised "no tickers had usable correlation
+        # data" for every new user. Passing a live-computed correlation
+        # matrix (e.g. from price data the caller already fetched for
+        # another purpose) must produce a working network instead.
+        cold_cache = UniverseCache(CacheConfig(cache_path=":memory:"))
+        cold_cache.set_correlation_index(["A", "B", "C"])
+        cold_cache.upsert(RankedUniverseEntry("A", "Tech", "US", 10.0, {}, [], now))
+        cold_cache.upsert(RankedUniverseEntry("B", "Tech", "US", 20.0, {}, [], now))
+        cold_cache.upsert(RankedUniverseEntry("C", "Energy", "US", 30.0, {}, [], now))
+
+        # Cache-only path fails entirely on a cold cache:
+        try:
+            build_correlation_matrix(cold_cache)
+            raise AssertionError("expected ValueError: cold cache has no usable correlation data")
+        except ValueError:
+            pass
+
+        # Live-computed correlation bypasses the cache dependency entirely:
+        live_corr = pd.DataFrame(
+            [[1.0, 0.0, -1.0], [0.0, 1.0, 0.5], [-1.0, 0.5, 1.0]],
+            index=["A", "B", "C"], columns=["A", "B", "C"],
+        )
+        cold_zoom = build_semantic_zoom_network(
+            cold_cache, sector_map, tickers=["A", "B", "C"], correlation=live_corr
+        )
+        assert set(cold_zoom.ticker_network.mst.nodes()) == {"A", "B", "C"}
+        assert cold_zoom.ticker_network.excluded_tickers == []
+        print("✓ build_semantic_zoom_network: live-computed correlation works on a cold cache")
+
+        # A ticker missing from the supplied live correlation matrix is
+        # excluded and reported, not silently dropped or crashed on.
+        partial_zoom = build_semantic_zoom_network(
+            cold_cache, sector_map, tickers=["A", "B", "C", "E"], correlation=live_corr
+        )
+        assert set(partial_zoom.ticker_network.mst.nodes()) == {"A", "B", "C"}
+        assert partial_zoom.ticker_network.excluded_tickers == ["E"]
+        print("✓ build_semantic_zoom_network: ticker missing from supplied correlation is excluded, not dropped silently")
 
         print("✓ network.py smoke test passed")
 

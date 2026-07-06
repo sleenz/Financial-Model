@@ -105,6 +105,7 @@ def _compute_backend_data(tickers: list) -> dict:
 
     fetcher = _get_on_demand_fetcher()
     cache = _get_universe_cache()
+    data_layer = _get_data_layer()
 
     entries = {}
     for t in tickers:
@@ -114,14 +115,6 @@ def _compute_backend_data(tickers: list) -> dict:
             result["errors"].append(f"{t}: ranking data unavailable ({exc})")
     result["entries"] = entries
     result["sector_map"] = {t: e.sector for t, e in entries.items()}
-
-    if len(entries) >= 2:
-        try:
-            result["zoom"] = build_semantic_zoom_network(
-                cache, result["sector_map"], tickers=list(entries.keys())
-            )
-        except Exception as exc:
-            result["errors"].append(f"Correlation network unavailable: {exc}")
 
     if entries:
         try:
@@ -138,6 +131,34 @@ def _compute_backend_data(tickers: list) -> dict:
             result["hist_prices"] = hist_prices
         except Exception as exc:
             result["errors"].append(f"Historical prices unavailable: {exc}")
+
+    if len(entries) >= 2:
+        # Prefer a correlation matrix computed live from the historical
+        # prices just fetched above over UniverseCache's correlation_row.
+        # OnDemandFetcher.get_or_fetch() always leaves correlation_row
+        # empty for a freshly-fetched ticker (deferred to the next
+        # run_nightly_refresh() — see fetch.py) and no such job is
+        # actually scheduled in this deployment, so every first-time
+        # ticker's row is permanently empty and the cache-only path
+        # (build_correlation_matrix) would exclude every ticker and raise
+        # "no tickers had usable correlation data" for any new user.
+        # Falls back to the cache-only path if fresh prices aren't
+        # available, so a ticker set that DOES have cached correlation
+        # data (e.g. after a nightly refresh eventually runs) still works
+        # even if a live price fetch fails.
+        live_correlation = None
+        hist_prices = result.get("hist_prices")
+        if hist_prices is not None and not hist_prices.empty:
+            live_returns = hist_prices.pct_change().dropna(how="all")
+            if len(live_returns) >= data_layer.config.min_correlation_overlap_days:
+                live_correlation = live_returns.corr()
+        try:
+            result["zoom"] = build_semantic_zoom_network(
+                cache, result["sector_map"], tickers=list(entries.keys()),
+                correlation=live_correlation,
+            )
+        except Exception as exc:
+            result["errors"].append(f"Correlation network unavailable: {exc}")
 
     n_sectors = len(set(result["sector_map"].values()))
     if "hist_prices" in result and result["hist_prices"] is not None and n_sectors >= 2:
