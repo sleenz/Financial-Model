@@ -520,6 +520,13 @@ with tab2:
                 st.error(f"Error fetching data: {e}")
 
 with tab3:
+    # Actions below call st.rerun() right after st.success()/st.error()/st.warning() —
+    # those calls never render since the rerun starts a fresh script run before
+    # Streamlit can paint them. Queue the message in session_state instead and
+    # flush it here on the run that follows the rerun.
+    for _flash_kind, _flash_msg in st.session_state.pop("_preset_flash", []):
+        getattr(st, _flash_kind)(_flash_msg)
+
     st.markdown(
         "Save named snapshots of your portfolio (tickers, weights, value) so you can "
         "switch between them without re-entering data. This is separate from the "
@@ -537,6 +544,9 @@ with tab3:
             return dt.strftime("%Y-%m-%d %H:%M UTC")
         except ValueError:
             return iso_str
+
+    def _queue_preset_flash(kind: str, message: str) -> None:
+        st.session_state.setdefault("_preset_flash", []).append((kind, message))
 
     def _current_portfolio_state():
         """Read the live portfolio input (tickers, weights, value) from the same
@@ -604,7 +614,7 @@ with tab3:
             else:
                 new_id = save_preset(name, _cur_tickers, _cur_weights, _cur_value)
                 st.session_state.loaded_preset_id = new_id
-                st.success(f"Saved new preset '{name}'.")
+                _queue_preset_flash("success", f"Saved new preset '{name}'.")
             st.rerun()
 
     st.markdown("---")
@@ -641,11 +651,12 @@ with tab3:
                     st.error("Failed to load this preset — the file may be corrupt. Check logs for details.")
                 else:
                     failed = _load_preset_and_populate_holdings(preset_data)
-                    st.success(f"Loaded preset '{preset_data['name']}' into My Current Holdings.")
+                    _queue_preset_flash("success", f"Loaded preset '{preset_data['name']}' into My Current Holdings.")
                     if failed:
-                        st.warning(
+                        _queue_preset_flash(
+                            "warning",
                             f"Could not fetch a current price for: {', '.join(failed)} — "
-                            "left out of My Current Holdings; add them manually if needed."
+                            "left out of My Current Holdings; add them manually if needed.",
                         )
                     st.rerun()
 
@@ -655,9 +666,9 @@ with tab3:
                 target_id = st.session_state.loaded_preset_id
                 tickers, weights, value = _current_portfolio_state()
                 if update_preset(target_id, tickers, weights, value):
-                    st.success("Updated the loaded preset in place.")
+                    _queue_preset_flash("success", "Updated the loaded preset in place.")
                 else:
-                    st.error("Failed to update — the preset file may have been deleted. Check logs.")
+                    _queue_preset_flash("error", "Failed to update — the preset file may have been deleted. Check logs.")
                 st.rerun()
             if not _can_update:
                 st.caption("Load a preset first to enable Update.")
@@ -699,7 +710,7 @@ with tab3:
                     update_preset(pending["conflict_id"], tickers, weights, value)
                     st.session_state.loaded_preset_id = pending["conflict_id"]
                     st.session_state.preset_pending_confirm = None
-                    st.success(f"Overwrote preset '{conflict_name}'.")
+                    _queue_preset_flash("success", f"Overwrote preset '{conflict_name}'.")
                     st.rerun()
             with c2:
                 if st.button("Cancel"):
@@ -733,7 +744,7 @@ with tab3:
                         else:
                             rename_preset(pending["target_id"], stripped)
                             st.session_state.preset_pending_confirm = None
-                            st.success(f"Renamed to '{stripped}'.")
+                            _queue_preset_flash("success", f"Renamed to '{stripped}'.")
                         st.rerun()
                 if st.button("Cancel", key="cancel_rename"):
                     st.session_state.preset_pending_confirm = None
@@ -752,7 +763,7 @@ with tab3:
                 if st.button("Rename Anyway", type="primary"):
                     rename_preset(pending["target_id"], pending["new_name"])
                     st.session_state.preset_pending_confirm = None
-                    st.success(f"Renamed to '{pending['new_name']}'.")
+                    _queue_preset_flash("success", f"Renamed to '{pending['new_name']}'.")
                     st.rerun()
             with c2:
                 if st.button("Cancel", key="cancel_rename_overwrite"):
@@ -770,7 +781,7 @@ with tab3:
                     if st.session_state.loaded_preset_id == pending["target_id"]:
                         st.session_state.loaded_preset_id = None
                     st.session_state.preset_pending_confirm = None
-                    st.success(f"Deleted preset '{target_name}'.")
+                    _queue_preset_flash("success", f"Deleted preset '{target_name}'.")
                     st.rerun()
             with c2:
                 if st.button("Cancel", key="cancel_delete"):
