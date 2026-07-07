@@ -5,28 +5,40 @@ Two independent metric groups live here:
 
 1. Sector exposure (HHI) + diversification rating — concentration risk,
    fusing sector spread with the Phase 3 correlation network's structure.
-2. Mixed-period Sharpe estimate — see below.
+2. Period-matched Sharpe estimate — see below.
 
-Per explicit instruction (refining the original Phase 4 spec): the return
-leg and volatility leg of the Sharpe estimate come from two different
-reference periods, and that mismatch is disclosed in the UI rather than
-papered over:
+Both legs of the Sharpe estimate are computed over the SAME trailing
+lookback_days window:
 
 - Return leg: REALIZED historical returns of the exact constructed
   portfolio (actual input share counts) over a trailing lookback_days
   window — not a modeled/CAPM/expected return.
-- Volatility leg: the existing DCC-GARCH model's CURRENT fitted
-  conditional covariance only (current_correlation + the latest row of
-  conditional_volatilities) — reused, not refit. forecast_correlation()
-  at any horizon is deliberately never used here: projecting a horizon
-  would compound the return/volatility period mismatch instead of
-  containing it to the one disclosed spot.
+- Volatility leg: the existing DCC-GARCH model's OWN fitted conditional
+  covariance path (conditional_correlations + conditional_volatilities),
+  averaged (as variance, before the final sqrt) over that SAME trailing
+  lookback_days window — reused, not refit. forecast_correlation() at any
+  horizon is deliberately never used here: projecting a horizon would
+  extrapolate past the disclosed, already-fitted history instead of
+  summarizing it.
+
+DEVIATION FROM THE ORIGINAL PHASE 4 SPEC: this module previously used only
+the model's single LATEST day (compute_dcc_garch_volatility_current) for
+the volatility leg, disclosing the resulting return/volatility period
+mismatch in the UI rather than fixing it. A user-reported "impossibly high
+Sharpe ratio" investigation confirmed via a controlled synthetic-data check
+(not just re-reading the formula) that a current-day-only snapshot can
+diverge by 2x+ from the trailing window's average whenever the current
+market regime differs from that window — silently distorting Sharpe in
+either direction. compute_dcc_garch_volatility_trailing() replaces it as
+the volatility leg actually used by the page; compute_dcc_garch_volatility_current()
+is kept (a current-moment risk reading is a legitimate, different question)
+but is no longer part of the Sharpe calculation.
 
 Isolation (absolute constraint 3): compute_realized_return(),
-compute_dcc_garch_volatility_current(), and compute_sharpe() are
-DISPLAY-ONLY, same treatment as expected_return_estimate() in the
-original spec. Phase 4's CHECK greps ranking.py to confirm zero
-references to any of the three.
+compute_dcc_garch_volatility_current(), compute_dcc_garch_volatility_trailing(),
+and compute_sharpe() are DISPLAY-ONLY, same treatment as
+expected_return_estimate() in the original spec. Phase 4's CHECK greps
+ranking.py to confirm zero references to any of them.
 """
 
 from __future__ import annotations
@@ -153,19 +165,32 @@ class SharpeConfig:
     lookback_days: int = 252
     # Annual rate (e.g. 0.045 for 4.5%) — must match the ~annual scale of
     # both compute_realized_return's cumulative window and
-    # compute_dcc_garch_volatility_current's annualized volatility.
+    # compute_dcc_garch_volatility_trailing's annualized volatility.
     # Deliberately Optional with no numeric default: FRED-sourced
     # risk-free rate is broken upstream (see Phase 0 audit), so this must
     # be set explicitly as a manual constant until that's fixed.
     # compute_sharpe() raises ValueError if this is still None — it must
     # never silently default to 0.0, which would quietly overstate Sharpe.
     risk_free_rate: Optional[float] = None
-    # Closed choice: "dcc_garch_current" is the only implemented/allowed
-    # value. This field exists so the choice is an explicit, named,
+    # Closed choice: "dcc_garch_trailing_average" is the only implemented/
+    # allowed value. This field exists so the choice is an explicit, named,
     # auditable config value rather than an unstated assumption — not
     # because a different value actually works. compute_sharpe() raises
     # if this is changed to anything else.
-    volatility_source: str = "dcc_garch_current"
+    #
+    # DEVIATION FROM THE ORIGINAL PHASE 4 SPEC: this was "dcc_garch_current"
+    # (the model's single latest-day conditional covariance only) until a
+    # user-reported "impossibly high Sharpe ratio" investigation confirmed
+    # (via a controlled synthetic-data check, not just re-reading the
+    # formula) that a current-day-only volatility snapshot can diverge by
+    # 2x+ from the trailing lookback_days window whenever the current
+    # market regime differs from that window's average — silently
+    # distorting Sharpe since the return leg is a cumulative REALIZED
+    # figure over that same window. "dcc_garch_trailing_average" (see
+    # compute_dcc_garch_volatility_trailing) fixes the period mismatch by
+    # averaging the model's own conditional variance path over the SAME
+    # lookback_days window, instead of changing which model computes it.
+    volatility_source: str = "dcc_garch_trailing_average"
 
     def __post_init__(self) -> None:
         if self.lookback_days <= 0:
@@ -266,6 +291,96 @@ def compute_dcc_garch_volatility_current(
     return annualized_vol
 
 
+def compute_dcc_garch_volatility_trailing(
+    dcc_result,
+    weights: pd.Series,
+    lookback_days: int = 252,
+    annualization_days: int = 252,
+) -> float:
+    """
+    w' Sigma_t w averaged over the trailing lookback_days timesteps of the
+    DCC-GARCH model's OWN fitted conditional covariance path (Sigma_t =
+    D_t R_t D_t at each historical day t, from conditional_volatilities and
+    conditional_correlations), then annualized.
+
+    This is the period-matched replacement for
+    compute_dcc_garch_volatility_current(): that function used only the
+    single LATEST day's conditional covariance, which — confirmed via a
+    controlled synthetic-data check (constant-vol regime: current-day and
+    trailing-average agree to within noise; regime-shift scenarios: they
+    can diverge by 2x+) — produces a materially different number whenever
+    the current moment's volatility differs from the trailing window's
+    average, silently distorting compute_sharpe() (in either direction)
+    since the return leg is a cumulative realized figure over that SAME
+    trailing window. Averaging the model's own daily conditional
+    VARIANCES (not volatilities) over the window before the final sqrt is
+    the standard way to get a representative "typical" volatility across
+    a period with time-varying vol — the same principle as realized
+    variance being built from squared (not linear) returns.
+
+    lookback_days must match SharpeConfig.lookback_days (the caller's
+    responsibility — see the page wiring) for the two Sharpe legs to
+    actually share the same window; this function does not read
+    SharpeConfig itself to avoid an import-direction dependency between
+    the two dataclasses.
+
+    Still never touches forecast_correlation() at any horizon — this
+    reuses only the model's already-fitted historical conditional path,
+    not a projection.
+    """
+    sectors = list(dcc_result.sector_names)
+
+    w = weights.reindex(sectors)
+    if w.isna().any():
+        missing = w.index[w.isna()].tolist()
+        raise ValueError(
+            f"compute_dcc_garch_volatility_trailing: weights missing for sector(s) "
+            f"{missing} (expected sector-level weights aligned to dcc_result.sector_names)"
+        )
+
+    cond_vol_df = dcc_result.conditional_volatilities.reindex(columns=sectors)
+    if cond_vol_df.isna().any().any():
+        missing = cond_vol_df.columns[cond_vol_df.isna().any()].tolist()
+        raise ValueError(
+            f"compute_dcc_garch_volatility_trailing: conditional_volatilities "
+            f"missing sector(s) {missing}"
+        )
+
+    total_days = len(cond_vol_df)
+    if total_days < lookback_days:
+        raise ValueError(
+            f"compute_dcc_garch_volatility_trailing: only {total_days} fitted day(s) "
+            f"available, need at least lookback_days={lookback_days}"
+        )
+
+    # conditional_correlations is a plain (T, N, N) ndarray aligned index-for-
+    # index with conditional_volatilities' rows (both built over the same T
+    # timeline in DCCGARCHModel.fit() — current_correlation is documented/
+    # confirmed there as exactly conditional_correlations[-1]), and its N
+    # axis order is dcc_result.sector_names — the same order `sectors` was
+    # just defined from, so no separate reindex is possible/needed for it.
+    window_vol = cond_vol_df.iloc[-lookback_days:]
+    window_corr = dcc_result.conditional_correlations[-lookback_days:]
+
+    w_arr = w.values
+    daily_variances = np.empty(lookback_days)
+    for i in range(lookback_days):
+        D = np.diag(window_vol.iloc[i].values)
+        R = window_corr[i]
+        sigma_matrix_daily = D @ R @ D
+        daily_variances[i] = w_arr @ sigma_matrix_daily @ w_arr
+
+    # Guard against tiny negative numerical noise from a near-singular
+    # correlation matrix on any individual day — a real negative variance
+    # is impossible.
+    daily_variances = np.maximum(daily_variances, 0.0)
+
+    avg_variance_daily = float(np.mean(daily_variances))
+    daily_vol = np.sqrt(avg_variance_daily)
+    annualized_vol = float(daily_vol * np.sqrt(annualization_days))
+    return annualized_vol
+
+
 def compute_sharpe(realized_return: float, volatility: float, config: SharpeConfig) -> float:
     """
     (realized_return - risk_free_rate) / volatility.
@@ -280,10 +395,10 @@ def compute_sharpe(realized_return: float, volatility: float, config: SharpeConf
             "explicitly as a manual constant until FRED is fixed upstream. "
             "Refusing to silently default to 0.0."
         )
-    if config.volatility_source != "dcc_garch_current":
+    if config.volatility_source != "dcc_garch_trailing_average":
         raise ValueError(
             f"compute_sharpe: volatility_source='{config.volatility_source}' is not "
-            "supported — 'dcc_garch_current' is the only implemented source "
+            "supported — 'dcc_garch_trailing_average' is the only implemented source "
             "(forecast_correlation() at any horizon is deliberately not an option)."
         )
     if volatility <= 0:
@@ -298,20 +413,31 @@ def compute_sharpe(realized_return: float, volatility: float, config: SharpeConf
     return (realized_return - config.risk_free_rate) / volatility
 
 
-def render_mixed_period_disclosure() -> None:
+def render_sharpe_methodology_disclosure() -> None:
     """
     Two-part progressive disclosure, not one dense string: a short badge
-    ("Mixed-period estimate") that expands to the full caveat. Renders
-    nothing else and computes nothing — purely a display component,
-    isolated from ranking.py and the composite score same as the
-    functions above.
+    that expands to the full caveat. Renders nothing else and computes
+    nothing — purely a display component, isolated from ranking.py and the
+    composite score same as the functions above.
+
+    RENAMED from render_mixed_period_disclosure(): the return and
+    volatility legs used to come from two different reference periods
+    (disclosed here as a caveat); compute_dcc_garch_volatility_trailing()
+    fixed that mismatch, so the old name/caveat would now be actively
+    misleading (there's no period mismatch left to disclose). What's
+    still worth disclosing: volatility is a GARCH-MODELED estimate over
+    that window, not the portfolio's own raw realized standard deviation
+    — a real, smaller methodological note, not the same caveat renamed.
     """
     import streamlit as st
 
-    with st.expander("Mixed-period estimate", expanded=False):
+    with st.expander("Sharpe methodology", expanded=False):
         st.caption(
-            "Return: trailing 12-month realized. Volatility: current model "
-            "estimate, not the same period. Not a forward estimate."
+            "Return and volatility are both computed over the same "
+            "trailing lookback window. Volatility is the DCC-GARCH "
+            "model's own conditional-variance path over that window, not "
+            "the portfolio's raw realized standard deviation. Not a "
+            "forward estimate."
         )
 
 
@@ -324,11 +450,12 @@ if __name__ == "__main__":
             SectorExposureResult,
             SharpeConfig,
             compute_dcc_garch_volatility_current,
+            compute_dcc_garch_volatility_trailing,
             compute_diversification_rating,
             compute_realized_return,
             compute_sector_exposure,
             compute_sharpe,
-            render_mixed_period_disclosure,
+            render_sharpe_methodology_disclosure,
         )
 
         # ── compute_sector_exposure: hand-computable 3-ticker, 2-sector set ──
@@ -464,6 +591,68 @@ if __name__ == "__main__":
             pass
         print("✓ compute_dcc_garch_volatility_current: mismatched weight index raises ValueError")
 
+        # ── compute_dcc_garch_volatility_trailing: period-matched replacement ──
+        # 5 days of fitted history; lookback_days=3 -- the first 2 days carry
+        # a deliberately huge volatility so that, if the windowing were
+        # broken and they leaked in, the result would be wildly larger than
+        # what's computed below. Correlation is held constant across days so
+        # the hand-computable part is just each day's w'Sigma w from its own
+        # (Tech, Energy) volatility pair.
+        sectors_t = ["Tech", "Energy"]
+        cond_vol_trailing = pd.DataFrame({
+            "Tech":   [5.0, 5.0, 0.010, 0.020, 0.010],
+            "Energy": [5.0, 5.0, 0.008, 0.008, 0.012],
+        })
+        corr_matrix_t = np.array([[1.0, 0.3], [0.3, 1.0]])
+        corr_path = np.array([corr_matrix_t] * 5)  # same correlation every day
+        weights_t = pd.Series({"Tech": 0.6, "Energy": 0.4})
+
+        class _FakeTrailingDCCResult:
+            sector_names = sectors_t
+            conditional_volatilities = cond_vol_trailing
+            conditional_correlations = corr_path
+
+        trailing_vol = compute_dcc_garch_volatility_trailing(
+            _FakeTrailingDCCResult(), weights_t, lookback_days=3, annualization_days=252
+        )
+
+        # Independent recomputation over ONLY the last 3 rows (index 2, 3, 4)
+        # -- freshly written, not reusing the function's own loop.
+        w_t = weights_t.reindex(sectors_t).values
+        window = cond_vol_trailing.iloc[-3:]
+        daily_vars = []
+        for i in range(3):
+            D_i = np.diag(window.iloc[i][sectors_t].values)
+            var_i = w_t @ (D_i @ corr_matrix_t @ D_i) @ w_t
+            daily_vars.append(var_i)
+        expected_trailing_vol = float(np.sqrt(np.mean(daily_vars)) * np.sqrt(252))
+        assert abs(trailing_vol - expected_trailing_vol) < 1e-12, (trailing_vol, expected_trailing_vol)
+        print("✓ compute_dcc_garch_volatility_trailing: matches independent trailing-average w'Sigma w recomputation")
+
+        # Confirm the windowing actually EXCLUDES the huge-volatility days
+        # outside lookback_days=3 -- if they'd leaked in, this would be
+        # orders of magnitude larger than the ~annual-scale result above.
+        assert trailing_vol < 1.0, (
+            f"trailing_vol={trailing_vol} suggests the excluded huge-vol days leaked into the window"
+        )
+        print("✓ compute_dcc_garch_volatility_trailing: correctly excludes days outside the lookback window")
+
+        # Fewer fitted days than lookback_days -> raises, doesn't silently truncate
+        try:
+            compute_dcc_garch_volatility_trailing(_FakeTrailingDCCResult(), weights_t, lookback_days=10)
+            raise AssertionError("expected ValueError for insufficient fitted history")
+        except ValueError:
+            pass
+        print("✓ compute_dcc_garch_volatility_trailing: fewer fitted days than lookback_days raises ValueError")
+
+        # Ticker-level (mismatched) weights -> raises rather than silently misaligning
+        try:
+            compute_dcc_garch_volatility_trailing(_FakeTrailingDCCResult(), bad_weights, lookback_days=3)
+            raise AssertionError("expected ValueError for sector/ticker weight mismatch")
+        except ValueError:
+            pass
+        print("✓ compute_dcc_garch_volatility_trailing: mismatched weight index raises ValueError")
+
         # ── compute_sharpe ────────────────────────────────────────────────
         config = SharpeConfig(risk_free_rate=0.04)
         sharpe = compute_sharpe(0.12, 0.18, config)
@@ -494,7 +683,7 @@ if __name__ == "__main__":
             raise AssertionError("expected ValueError for unsupported volatility_source")
         except ValueError:
             pass
-        print("✓ compute_sharpe: non-'dcc_garch_current' volatility_source raises ValueError")
+        print("✓ compute_sharpe: non-'dcc_garch_trailing_average' volatility_source raises ValueError")
 
         # ── SharpeConfig validation ───────────────────────────────────────
         try:
@@ -505,8 +694,8 @@ if __name__ == "__main__":
         print("✓ SharpeConfig: lookback_days<=0 raises ValueError")
 
         # ── Rule 2: reused/new names resolve ──────────────────────────────
-        assert callable(render_mixed_period_disclosure)
-        print("✓ render_mixed_period_disclosure resolves")
+        assert callable(render_sharpe_methodology_disclosure)
+        print("✓ render_sharpe_methodology_disclosure resolves")
 
         print("✓ metrics.py smoke test passed")
 
