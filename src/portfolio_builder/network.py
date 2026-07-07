@@ -259,21 +259,24 @@ class NetworkStyleConfig:
     rank percentile) into visuals, so a fix for "hardcoded colors/opacity
     in the page" is an auditable config field, not a bare literal.
 
-    Edge opacity = edge_opacity_floor + edge_opacity_range * abs(rho) —
-    continuous in correlation STRENGTH regardless of sign, not a binary
-    on/off, and not one-sided: a strong hedge (rho close to -1) is exactly
-    as visually prominent as an equally strong positive correlation, since
-    hedge-hunting is a first-class use of this chart, not a faded-out
+    Edge STRENGTH is encoded as a diverging COLOR GRADIENT, not opacity: a
+    correlation of 0 renders edge_color_neutral, -1 renders edge_color_negative,
+    +1 renders edge_color_positive, and anything in between is a linear RGB
+    interpolation toward whichever end it's closer to (see edge_color_for_correlation).
+    Opacity is a single fixed value (edge_opacity) applied to every edge —
+    it no longer varies with correlation, so a strong hedge is exactly as
+    visually prominent (in fully-saturated hedge color) as an equally strong
+    positive correlation is in fully-saturated positive color, not a faded
     afterthought. Color tokens below are the app's existing palette
-    (edge_color_positive/negative reuse app/pages/2_Optimization.py's
-    "coral"/"steelblue"; node tier colors reuse app/pages/4_Stress_Testing.py's
-    low/warning/critical green/orange/red), not new colors invented for
-    this feature — color is what encodes the SIGN, opacity encodes STRENGTH.
+    (edge_color_positive/negative are hex equivalents of
+    app/pages/2_Optimization.py's "coral"/"steelblue"; node tier colors
+    reuse app/pages/4_Stress_Testing.py's low/warning/critical
+    green/orange/red), not new colors invented for this feature.
     """
-    edge_opacity_floor: float = 0.15
-    edge_opacity_range: float = 0.60
-    edge_color_positive: str = "coral"
-    edge_color_negative: str = "steelblue"
+    edge_opacity: float = 1.0
+    edge_color_positive: str = "#ff7f50"  # "coral", as a hex triplet so it can be gradient-interpolated
+    edge_color_negative: str = "#4682b4"  # "steelblue", same reason
+    edge_color_neutral: str = "#d3d3d3"   # "lightgray" — the gradient's zero-correlation midpoint
     node_color_top: str = "green"
     node_color_mid: str = "orange"
     node_color_bottom: str = "red"
@@ -281,17 +284,37 @@ class NetworkStyleConfig:
     tier_bottom_percentile: float = 0.33  # matches the Ranked List's own 🔴 threshold
 
 
-def edge_style_for_correlation(
+def _hex_to_rgb(hex_color: str) -> tuple:
+    hex_color = hex_color.lstrip("#")
+    return tuple(int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def _rgb_to_hex(rgb: tuple) -> str:
+    return "#{:02x}{:02x}{:02x}".format(*(max(0, min(255, round(c))) for c in rgb))
+
+
+def _lerp_hex(color_a: str, color_b: str, t: float) -> str:
+    """Linear interpolation between two '#rrggbb' colors at t in [0.0, 1.0]
+    (t=0 -> color_a, t=1 -> color_b), channel by channel in RGB space —
+    a plain, dependency-free gradient, not a perceptual color space."""
+    t = max(0.0, min(1.0, t))
+    a, b = _hex_to_rgb(color_a), _hex_to_rgb(color_b)
+    return _rgb_to_hex(tuple(a[i] + (b[i] - a[i]) * t for i in range(3)))
+
+
+def edge_color_for_correlation(
     correlation: float, config: NetworkStyleConfig = NetworkStyleConfig()
-) -> tuple:
-    """(color, opacity) for one MST edge, continuous in |correlation|
-    STRENGTH rather than a fixed single color/width for every edge — a
-    strong hedge (correlation near -1) gets just as high an opacity as an
-    equally strong positive correlation. The sign only flips the color
-    token (muted token for non-positive correlation), never the opacity."""
-    opacity = config.edge_opacity_floor + config.edge_opacity_range * abs(correlation)
-    color = config.edge_color_positive if correlation > 0 else config.edge_color_negative
-    return color, float(opacity)
+) -> str:
+    """Diverging gradient color for one edge's correlation: edge_color_negative
+    at rho=-1, edge_color_neutral at rho=0, edge_color_positive at rho=+1,
+    linearly interpolated in between — so correlation STRENGTH reads as a
+    color gradient rather than an opacity difference. rho is clamped to
+    [-1, 1] defensively (it's always in that range by construction, but a
+    gradient function shouldn't extrapolate past its own endpoints)."""
+    rho = max(-1.0, min(1.0, correlation))
+    if rho <= 0.0:
+        return _lerp_hex(config.edge_color_negative, config.edge_color_neutral, rho + 1.0)
+    return _lerp_hex(config.edge_color_neutral, config.edge_color_positive, rho)
 
 
 def node_color_for_percentile(
@@ -588,7 +611,7 @@ if __name__ == "__main__":
         # ── correlation_from_distance: exact inverse of the Mantegna transform ──
         from src.portfolio_builder.network import (
             NetworkStyleConfig,
-            edge_style_for_correlation,
+            edge_color_for_correlation,
             node_color_for_percentile,
         )
 
@@ -597,24 +620,31 @@ if __name__ == "__main__":
             assert abs(correlation_from_distance(d) - rho) < 1e-9, (rho, d)
         print("✓ correlation_from_distance: exact inverse of compute_distance_matrix's transform")
 
-        # ── edge_style_for_correlation: continuous |strength| opacity, correct color token ──
+        # ── edge_color_for_correlation: diverging gradient, not opacity ──
         style = NetworkStyleConfig()
-        color_hi, opacity_hi = edge_style_for_correlation(1.0, style)
-        color_zero, opacity_zero = edge_style_for_correlation(0.0, style)
-        color_neg, opacity_neg = edge_style_for_correlation(-0.8, style)
-        color_strong_hedge, opacity_strong_hedge = edge_style_for_correlation(-1.0, style)
-        assert color_hi == style.edge_color_positive
-        assert abs(opacity_hi - (style.edge_opacity_floor + style.edge_opacity_range)) < 1e-9
-        assert color_zero == style.edge_color_negative
-        assert abs(opacity_zero - style.edge_opacity_floor) < 1e-9
-        assert color_neg == style.edge_color_negative
-        assert abs(opacity_neg - (style.edge_opacity_floor + style.edge_opacity_range * 0.8)) < 1e-9
-        # a maximally strong hedge (rho=-1) gets the SAME opacity as a maximally
-        # strong positive correlation (rho=1) -- strength is sign-agnostic,
-        # only the color token flips, so a hedge is never visually washed out
-        assert color_strong_hedge == style.edge_color_negative
-        assert abs(opacity_strong_hedge - opacity_hi) < 1e-9
-        print("✓ edge_style_for_correlation: opacity scales with |correlation| regardless of sign — strong hedges are as visible as strong positive edges")
+        assert edge_color_for_correlation(1.0, style) == style.edge_color_positive
+        assert edge_color_for_correlation(-1.0, style) == style.edge_color_negative
+        assert edge_color_for_correlation(0.0, style) == style.edge_color_neutral
+
+        # A halfway-positive correlation is exactly halfway (in RGB space)
+        # between neutral and the positive token -- and independently
+        # recomputed here, not just re-deriving the function's own formula.
+        def _independent_lerp(a_hex, b_hex, t):
+            a = tuple(int(a_hex.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+            b = tuple(int(b_hex.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+            return "#{:02x}{:02x}{:02x}".format(*(round(a[i] + (b[i] - a[i]) * t) for i in range(3)))
+
+        expected_half_positive = _independent_lerp(style.edge_color_neutral, style.edge_color_positive, 0.5)
+        assert edge_color_for_correlation(0.5, style) == expected_half_positive
+        expected_half_negative = _independent_lerp(style.edge_color_negative, style.edge_color_neutral, 0.5)
+        assert edge_color_for_correlation(-0.5, style) == expected_half_negative
+
+        # Opacity is now a single fixed constant, not derived from correlation
+        # at all -- a strong hedge and a strong positive correlation get the
+        # exact same (default: fully opaque) edge_opacity, so strength is
+        # legible purely from color, never from how faded a line looks.
+        assert style.edge_opacity == 1.0
+        print("✓ edge_color_for_correlation: diverging gradient (negative→neutral→positive), opacity fixed not correlation-derived")
 
         # ── node_color_for_percentile: matches Ranked List's tri-tier thresholds ──
         assert node_color_for_percentile(0.9, style) == style.node_color_top
