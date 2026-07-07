@@ -64,6 +64,16 @@ _MANUAL_RISK_FREE_RATE = 0.045  # update periodically until FRED is fixed
 # subsequent rerun (see the Correlation Network section). ────────────────
 _CORRELATION_NETWORK_CONFIG = CorrelationNetworkConfig()
 
+# ── Correlation network / DCC-GARCH lookback — DELIBERATELY DECOUPLED from
+# SharpeConfig().lookback_days. Both features share the same fetched
+# hist_prices DataFrame, but each slices its OWN trailing window from it
+# below (see _compute_backend_data) — otherwise extending the Sharpe
+# window (e.g. to 3 years, per explicit instruction) would silently also
+# extend the correlation network's and DCC-GARCH's effective sample window,
+# an unrelated feature nobody asked to change. 252 preserves their
+# original, already-reviewed 1-year effective window exactly. ────────────
+_CORRELATION_LOOKBACK_DAYS = 252
+
 
 # ── Cached resources (survive reruns within a session — not reopened per
 # rerun the way a plain UniverseCache()/DataManager() call would be) ──────
@@ -164,7 +174,10 @@ def _compute_backend_data(tickers: list) -> dict:
         live_correlation = None
         hist_prices = result.get("hist_prices")
         if hist_prices is not None and not hist_prices.empty:
-            live_returns = hist_prices.pct_change().dropna(how="all")
+            # Sliced to _CORRELATION_LOOKBACK_DAYS, NOT the full (now
+            # possibly 3-year) hist_prices fetch — see that constant's
+            # comment for why this stays decoupled from Sharpe's window.
+            live_returns = hist_prices.iloc[-_CORRELATION_LOOKBACK_DAYS:].pct_change().dropna(how="all")
             if len(live_returns) >= data_layer.config.min_correlation_overlap_days:
                 live_correlation = live_returns.corr()
         try:
@@ -559,9 +572,18 @@ else:
                 )
                 sharpe = compute_sharpe(realized, vol, sharpe_config)
 
+                # Derived from sharpe_config.lookback_days, not a hardcoded
+                # "12mo"/"3yr" string — stays correct if that default ever
+                # changes again without a matching UI-label edit.
+                lookback_years = sharpe_config.lookback_days / 252
+                if lookback_years == int(lookback_years):
+                    period_label = f"{int(lookback_years)}yr avg"
+                else:
+                    period_label = f"{sharpe_config.lookback_days}d avg"
+
                 m1, m2, m3 = st.columns(3)
-                m1.metric("Realized Return (12mo)", f"{realized * 100:.2f}%")
-                m2.metric("Volatility (12mo trailing, annualized)", f"{vol * 100:.2f}%")
+                m1.metric(f"Realized Return ({period_label})", f"{realized * 100:.2f}%")
+                m2.metric(f"Volatility ({period_label}, annualized)", f"{vol * 100:.2f}%")
                 m3.metric("Sharpe", f"{sharpe:.2f}")
                 render_sharpe_methodology_disclosure()
             except ValueError as exc:

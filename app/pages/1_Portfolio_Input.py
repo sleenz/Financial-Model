@@ -1,4 +1,20 @@
-"""Portfolio Input Page - Enter tickers, dates, and parameters."""
+"""Portfolio Input Page - Enter tickers, dates, and parameters.
+
+Merged with the former standalone Portfolio Presets page (per explicit
+instruction: "merge the portfolio preset with the portfolio input... since
+they are correlated") — presets are just named snapshots of a portfolio,
+and this page is where a portfolio is built/edited, so they now live
+together as a third tab instead of two separate pages in the sidebar nav.
+
+Bug fix (per explicit report): loading a preset used to only populate
+st.session_state.tickers/weights, which pre-filled Option 2's Manual
+Ticker Entry text area, not Option 1's My Current Holdings (the
+ticker->shares dict a user can actually add to / edit / remove from).
+_load_preset_and_populate_holdings() below now ALSO derives a share count
+per ticker (shares = weight * portfolio_value / current_price, via a live
+price fetch) and writes it into current_holdings, so a loaded preset shows
+up as editable holdings — the whole point of loading one to adjust it.
+"""
 
 import streamlit as st
 import pandas as pd
@@ -14,7 +30,16 @@ from src.data.data_manager import DataManager
 from src.utils.helpers import validate_tickers
 from src.portfolio.holdings import HoldingsTracker
 from src.utils.settings_manager import load_settings, save_settings
-from src.utils.preset_manager import list_presets, load_preset, apply_preset_to_state
+from src.utils.preset_manager import (
+    list_presets,
+    preset_name_exists,
+    load_preset,
+    save_preset,
+    update_preset,
+    rename_preset,
+    delete_preset,
+    apply_preset_to_state,
+)
 
 st.set_page_config(page_title="Portfolio Input", page_icon=None, layout="wide")
 
@@ -39,20 +64,74 @@ if 'current_portfolio_weights' not in st.session_state:
     st.session_state.current_portfolio_weights = None
 if 'settings' not in st.session_state:
     st.session_state.settings = {}
+if 'loaded_preset_id' not in st.session_state:
+    st.session_state.loaded_preset_id = None
+if 'preset_pending_confirm' not in st.session_state:
+    st.session_state.preset_pending_confirm = None
+
+
+def _load_preset_and_populate_holdings(preset: dict) -> list:
+    """
+    Load a preset's saved (tickers, weights, value) via the existing
+    apply_preset_to_state() — unchanged, since other pages (Optimization,
+    Risk Analytics, etc.) read st.session_state.weights/portfolio_value
+    directly and must keep seeing them populated the same way — AND
+    additionally derive a per-ticker SHARE count into current_holdings
+    (shares = weight * portfolio_value / current_price), so the preset
+    shows up in the My Current Holdings tab as editable positions instead
+    of only pre-filling Manual Ticker Entry's raw ticker list.
+
+    Returns the list of tickers that couldn't get a current price (left
+    out of current_holdings, not silently zeroed) — callers surface this
+    as a warning.
+    """
+    apply_preset_to_state(preset, st.session_state)
+
+    tickers = list(preset.get("tickers", []))
+    weights = list(preset.get("weights", []))
+    value = float(preset.get("portfolio_value", 0.0))
+
+    # A stale tracker built from whatever holdings existed BEFORE this
+    # load would otherwise keep showing diversity metrics for a different
+    # portfolio until the user re-clicks Analyze.
+    st.session_state.holdings_tracker = None
+
+    if not tickers or value <= 0:
+        st.session_state.current_holdings = {}
+        return []
+
+    try:
+        dm = DataManager(show_progress=False)
+        prices = dm.get_current_prices(tickers)
+    except Exception:
+        prices = pd.Series(dtype=float)
+
+    holdings: dict = {}
+    failed_tickers = []
+    for ticker, weight in zip(tickers, weights):
+        price = prices.get(ticker)
+        if price is None or price <= 0:
+            failed_tickers.append(ticker)
+            continue
+        holdings[ticker] = round((weight * value) / price, 2)
+
+    st.session_state.current_holdings = holdings
+    return failed_tickers
+
 
 # Sidebar for quick settings
 with st.sidebar:
     st.header("Quick Settings")
 
-    # Saved presets (from the Portfolio Presets page) are appended after the
+    # Saved presets (from the Presets tab below) are appended after the
     # built-in starter baskets so they're one click away — picking one loads
-    # its tickers/weights/value into session_state immediately.
+    # its tickers/weights/value into My Current Holdings immediately.
     _saved_presets = list_presets()
-    _name_counts: dict[str, int] = {}
+    _name_counts: dict = {}
     for _p in _saved_presets:
         _name_counts[_p["name"]] = _name_counts.get(_p["name"], 0) + 1
 
-    _saved_id_by_label: dict[str, str] = {}
+    _saved_id_by_label: dict = {}
     _saved_labels = []
     for _p in _saved_presets:
         _label = f"⭐ {_p['name']}"
@@ -72,8 +151,9 @@ with st.sidebar:
         if data is None:
             st.session_state["_quick_preset_load_error"] = True
         else:
-            apply_preset_to_state(data, st.session_state)
+            failed = _load_preset_and_populate_holdings(data)
             st.session_state["_quick_preset_loaded_name"] = data["name"]
+            st.session_state["_quick_preset_price_failures"] = failed
 
     preset = st.selectbox(
         "Load Preset Portfolio",
@@ -82,24 +162,30 @@ with st.sidebar:
         on_change=_on_quick_preset_change,
         help="Built-in starter baskets, or your own saved presets — "
              "picking a saved preset instantly loads its tickers, weights, "
-             "and value.",
+             "and value into My Current Holdings (as editable share counts).",
     )
 
     if st.session_state.pop("_quick_preset_load_error", False):
         st.error("Failed to load that preset — it may be corrupt. Check logs for details.")
     _loaded_name = st.session_state.pop("_quick_preset_loaded_name", None)
     if _loaded_name:
-        st.success(f"Loaded '{_loaded_name}'.")
+        st.success(f"Loaded '{_loaded_name}' into My Current Holdings.")
+    _price_failures = st.session_state.pop("_quick_preset_price_failures", None)
+    if _price_failures:
+        st.warning(
+            f"Could not fetch a current price for: {', '.join(_price_failures)} — "
+            "left out of My Current Holdings; add them manually if needed."
+        )
 
-    if preset in _saved_id_by_label:
-        default_tickers = ", ".join(st.session_state.get("tickers", []))
-    elif preset == "Tech Giants":
+    if preset == "Tech Giants":
         default_tickers = "AAPL, MSFT, GOOGL, AMZN, NVDA"
     elif preset == "Diversified ETFs":
         default_tickers = "SPY, QQQ, IWM, EFA, AGG"
     elif preset == "Blue Chips":
         default_tickers = "JNJ, PG, KO, WMT, JPM"
     else:
+        # Includes the saved-preset case: those now load into My Current
+        # Holdings (see _load_preset_and_populate_holdings), not here.
         default_tickers = ""
 
 # Time period selection (needed for both methods)
@@ -132,8 +218,14 @@ if period != "Custom":
 
 st.markdown("---")
 
-# Two input methods with tabs
-tab1, tab2 = st.tabs([" Option 1: My Current Holdings", " Option 2: Manual Ticker Entry"])
+# Three input methods with tabs — Presets merged in as its own tab (was a
+# separate page) since it's just another way to populate the same
+# My Current Holdings / Manual Ticker Entry state below.
+tab1, tab2, tab3 = st.tabs([
+    " Option 1: My Current Holdings",
+    " Option 2: Manual Ticker Entry",
+    " Presets",
+])
 
 with tab1:
     st.markdown("""
@@ -426,6 +518,275 @@ with tab2:
 
             except Exception as e:
                 st.error(f"Error fetching data: {e}")
+
+with tab3:
+    # Actions below call st.rerun() right after st.success()/st.error()/st.warning() —
+    # those calls never render since the rerun starts a fresh script run before
+    # Streamlit can paint them. Queue the message in session_state instead and
+    # flush it here on the run that follows the rerun.
+    for _flash_kind, _flash_msg in st.session_state.pop("_preset_flash", []):
+        getattr(st, _flash_kind)(_flash_msg)
+
+    st.markdown(
+        "Save named snapshots of your portfolio (tickers, weights, value) so you can "
+        "switch between them without re-entering data. This is separate from the "
+        "automatic last-session save — presets are saved and loaded explicitly. "
+        "Loading a preset here populates **My Current Holdings** (Option 1 tab above) "
+        "with editable share counts, derived from the preset's saved weights/value at "
+        "current market prices."
+    )
+
+    def _fmt_ts(iso_str: str) -> str:
+        if not iso_str:
+            return "unknown"
+        try:
+            dt = datetime.fromisoformat(iso_str)
+            return dt.strftime("%Y-%m-%d %H:%M UTC")
+        except ValueError:
+            return iso_str
+
+    def _queue_preset_flash(kind: str, message: str) -> None:
+        st.session_state.setdefault("_preset_flash", []).append((kind, message))
+
+    def _current_portfolio_state():
+        """Read the live portfolio input (tickers, weights, value) from the same
+        session_state keys the My Current Holdings / Manual Ticker Entry /
+        Optimization widgets already use, for saving AS a preset."""
+        weights_obj = st.session_state.get('weights')
+        if weights_obj is not None:
+            tickers = [str(t) for t in weights_obj.index]
+            weights = [float(w) for w in weights_obj.values]
+        else:
+            tickers = [str(t) for t in st.session_state.get('tickers', [])]
+            n = len(tickers)
+            weights = [1.0 / n] * n if n else []
+        portfolio_value = float(st.session_state.get('portfolio_value', 0.0) or 0.0)
+        return tickers, weights, portfolio_value
+
+    st.markdown("---")
+
+    # --- Current portfolio summary + Save As New ---------------------------
+    st.subheader("Current Portfolio")
+
+    _cur_tickers, _cur_weights, _cur_value = _current_portfolio_state()
+
+    if _cur_tickers:
+        pcol1, pcol2, pcol3 = st.columns(3)
+        with pcol1:
+            st.metric("Tickers", len(_cur_tickers))
+        with pcol2:
+            st.metric("Portfolio Value", f"${_cur_value:,.2f}")
+        with pcol3:
+            _loaded = st.session_state.loaded_preset_id
+            _loaded_preset_name = None
+            if _loaded:
+                for _p in list_presets():
+                    if _p["preset_id"] == _loaded:
+                        _loaded_preset_name = _p["name"]
+                        break
+            st.metric("Loaded Preset", _loaded_preset_name or "None")
+
+        with st.expander("View current tickers / weights", expanded=False):
+            st.dataframe(
+                pd.DataFrame({"Ticker": _cur_tickers, "Weight": [f"{w*100:.2f}%" for w in _cur_weights]}),
+                width="stretch",
+            )
+    else:
+        st.info(
+            "No portfolio loaded yet. Enter tickers in **My Current Holdings** or "
+            "**Manual Ticker Entry** above first (and click Analyze / Fetch Data)."
+        )
+
+    save_new_name = st.text_input("Preset name", key="preset_save_new_name", placeholder="e.g. Portfolio 1")
+
+    if st.button("Save As New Preset", type="primary", disabled=not _cur_tickers):
+        name = save_new_name.strip()
+        if not name:
+            st.error("Please enter a name for the preset.")
+        else:
+            conflict_id = preset_name_exists(name)
+            if conflict_id:
+                st.session_state.preset_pending_confirm = {
+                    "action": "save_new_overwrite",
+                    "conflict_id": conflict_id,
+                    "name": name,
+                }
+            else:
+                new_id = save_preset(name, _cur_tickers, _cur_weights, _cur_value)
+                st.session_state.loaded_preset_id = new_id
+                _queue_preset_flash("success", f"Saved new preset '{name}'.")
+            st.rerun()
+
+    st.markdown("---")
+
+    # --- Saved presets list / actions ---------------------------------------
+    st.subheader("Saved Presets")
+
+    presets = list_presets()
+
+    if not presets:
+        st.info("No presets saved yet. Use **Save As New Preset** above to create one.")
+    else:
+        listing_df = pd.DataFrame(
+            [{"Name": p["name"], "Last Updated": _fmt_ts(p["updated_at"])} for p in presets]
+        )
+        st.dataframe(listing_df, width="stretch", hide_index=True)
+
+        options = [p["preset_id"] for p in presets]
+        labels = {p["preset_id"]: f"{p['name']}  —  {_fmt_ts(p['updated_at'])}" for p in presets}
+
+        selected_id = st.selectbox(
+            "Select a preset",
+            options,
+            format_func=lambda pid: labels.get(pid, pid),
+            key="preset_selected_id",
+        )
+
+        col_load, col_update, col_rename, col_delete = st.columns(4)
+
+        with col_load:
+            if st.button("Load", width="stretch"):
+                preset_data = load_preset(selected_id)
+                if preset_data is None:
+                    st.error("Failed to load this preset — the file may be corrupt. Check logs for details.")
+                else:
+                    failed = _load_preset_and_populate_holdings(preset_data)
+                    _queue_preset_flash("success", f"Loaded preset '{preset_data['name']}' into My Current Holdings.")
+                    if failed:
+                        _queue_preset_flash(
+                            "warning",
+                            f"Could not fetch a current price for: {', '.join(failed)} — "
+                            "left out of My Current Holdings; add them manually if needed.",
+                        )
+                    st.rerun()
+
+        with col_update:
+            _can_update = st.session_state.loaded_preset_id is not None
+            if st.button("Update Current", width="stretch", disabled=not _can_update):
+                target_id = st.session_state.loaded_preset_id
+                tickers, weights, value = _current_portfolio_state()
+                if update_preset(target_id, tickers, weights, value):
+                    _queue_preset_flash("success", "Updated the loaded preset in place.")
+                else:
+                    _queue_preset_flash("error", "Failed to update — the preset file may have been deleted. Check logs.")
+                st.rerun()
+            if not _can_update:
+                st.caption("Load a preset first to enable Update.")
+
+        with col_rename:
+            if st.button("Rename", width="stretch"):
+                st.session_state.preset_pending_confirm = {
+                    "action": "rename_form",
+                    "target_id": selected_id,
+                }
+                st.rerun()
+
+        with col_delete:
+            if st.button("Delete", width="stretch"):
+                st.session_state.preset_pending_confirm = {
+                    "action": "delete_confirm",
+                    "target_id": selected_id,
+                }
+                st.rerun()
+
+    # --- Pending confirmation / follow-up UI ---------------------------------
+    pending = st.session_state.preset_pending_confirm
+
+    if pending is not None:
+        st.markdown("---")
+
+        if pending["action"] == "save_new_overwrite":
+            conflict = load_preset(pending["conflict_id"])
+            conflict_name = conflict["name"] if conflict else pending["name"]
+            st.warning(
+                f"A preset named **'{pending['name']}'** already exists. "
+                "Saving with this name will overwrite that preset's data "
+                "(its underlying file stays the same, only its contents change)."
+            )
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button(f"Overwrite '{conflict_name}'", type="primary"):
+                    tickers, weights, value = _current_portfolio_state()
+                    update_preset(pending["conflict_id"], tickers, weights, value)
+                    st.session_state.loaded_preset_id = pending["conflict_id"]
+                    st.session_state.preset_pending_confirm = None
+                    _queue_preset_flash("success", f"Overwrote preset '{conflict_name}'.")
+                    st.rerun()
+            with c2:
+                if st.button("Cancel"):
+                    st.session_state.preset_pending_confirm = None
+                    st.rerun()
+
+        elif pending["action"] == "rename_form":
+            target = load_preset(pending["target_id"])
+            if target is None:
+                st.error("This preset no longer exists.")
+                st.session_state.preset_pending_confirm = None
+            else:
+                st.markdown(f"**Rename '{target['name']}'**")
+                new_name = st.text_input("New name", value=target["name"], key="preset_rename_input")
+                if st.button("Confirm Rename", type="primary"):
+                    stripped = new_name.strip()
+                    if not stripped:
+                        st.error("Please enter a non-empty name.")
+                    elif stripped == target["name"]:
+                        st.session_state.preset_pending_confirm = None
+                        st.rerun()
+                    else:
+                        conflict_id = preset_name_exists(stripped, exclude_id=pending["target_id"])
+                        if conflict_id:
+                            st.session_state.preset_pending_confirm = {
+                                "action": "rename_overwrite_confirm",
+                                "target_id": pending["target_id"],
+                                "new_name": stripped,
+                                "conflict_id": conflict_id,
+                            }
+                        else:
+                            rename_preset(pending["target_id"], stripped)
+                            st.session_state.preset_pending_confirm = None
+                            _queue_preset_flash("success", f"Renamed to '{stripped}'.")
+                        st.rerun()
+                if st.button("Cancel", key="cancel_rename"):
+                    st.session_state.preset_pending_confirm = None
+                    st.rerun()
+
+        elif pending["action"] == "rename_overwrite_confirm":
+            conflict = load_preset(pending["conflict_id"])
+            conflict_name = conflict["name"] if conflict else pending["new_name"]
+            st.warning(
+                f"Another preset is already named **'{pending['new_name']}'**. "
+                "Two presets with the same display name would be ambiguous in the "
+                "dropdown. Rename anyway?"
+            )
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Rename Anyway", type="primary"):
+                    rename_preset(pending["target_id"], pending["new_name"])
+                    st.session_state.preset_pending_confirm = None
+                    _queue_preset_flash("success", f"Renamed to '{pending['new_name']}'.")
+                    st.rerun()
+            with c2:
+                if st.button("Cancel", key="cancel_rename_overwrite"):
+                    st.session_state.preset_pending_confirm = None
+                    st.rerun()
+
+        elif pending["action"] == "delete_confirm":
+            target = load_preset(pending["target_id"])
+            target_name = target["name"] if target else pending["target_id"]
+            st.warning(f"Delete preset **'{target_name}'**? This cannot be undone.")
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("Confirm Delete", type="primary"):
+                    delete_preset(pending["target_id"])
+                    if st.session_state.loaded_preset_id == pending["target_id"]:
+                        st.session_state.loaded_preset_id = None
+                    st.session_state.preset_pending_confirm = None
+                    _queue_preset_flash("success", f"Deleted preset '{target_name}'.")
+                    st.rerun()
+            with c2:
+                if st.button("Cancel", key="cancel_delete"):
+                    st.session_state.preset_pending_confirm = None
+                    st.rerun()
 
 st.markdown("---")
 

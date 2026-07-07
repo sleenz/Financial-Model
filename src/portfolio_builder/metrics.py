@@ -162,9 +162,15 @@ def compute_diversification_rating(sector_exposure: SectorExposureResult, ticker
 
 @dataclass
 class SharpeConfig:
-    lookback_days: int = 252
+    lookback_days: int = 3 * 252  # 3 years of trading days (~1 year = 252) — per explicit
+    # instruction to use the past 3 years' average return and volatility,
+    # not the prior 1-year window. compute_realized_return() ANNUALIZES
+    # (CAGR) over this window rather than reporting the raw multi-year
+    # cumulative total, so this stays an average ANNUAL rate on the same
+    # scale as compute_dcc_garch_volatility_trailing's annualized
+    # volatility for any lookback_days, not just the 252-day special case.
     # Annual rate (e.g. 0.045 for 4.5%) — must match the ~annual scale of
-    # both compute_realized_return's cumulative window and
+    # both compute_realized_return's annualized return and
     # compute_dcc_garch_volatility_trailing's annualized volatility.
     # Deliberately Optional with no numeric default: FRED-sourced
     # risk-free rate is broken upstream (see Phase 0 audit), so this must
@@ -197,13 +203,27 @@ class SharpeConfig:
             raise ValueError(f"lookback_days must be > 0, got {self.lookback_days}")
 
 
-def compute_realized_return(portfolio_returns: pd.Series, lookback_days: int) -> float:
+def compute_realized_return(
+    portfolio_returns: pd.Series, lookback_days: int, annualization_days: int = 252,
+) -> float:
     """
-    Cumulative (compounded) realized return of the ACTUAL constructed
-    portfolio over the trailing lookback_days daily returns — "trailing
-    12-month realized" for the default lookback_days=252. Not a modeled or
-    CAPM-implied return: this is what the specific share-count portfolio
-    the user actually built would have returned.
+    ANNUALIZED (CAGR) realized return of the ACTUAL constructed portfolio
+    over the trailing lookback_days daily returns — the average ANNUAL
+    rate, not the raw multi-window cumulative total: compound the window
+    first, then convert via (1+cumulative)^(annualization_days/lookback_days)
+    - 1. Not a modeled or CAPM-implied return: this is what the specific
+    share-count portfolio the user actually built would have returned, per
+    year on average.
+
+    At lookback_days == annualization_days (the historical default,
+    252 == 252, "trailing 12-month realized"), the exponent is 1 and this
+    is exactly the prior cumulative-return behavior. For a multi-year
+    window (e.g. lookback_days=756 for 3 years, the current default —
+    "use the past 3 years' average return", not the 3-year total), this
+    is what actually keeps the figure on the same annual scale as
+    compute_dcc_garch_volatility_trailing's annualized volatility; a raw
+    3-year cumulative total divided by a 1-year-scale volatility would
+    reintroduce the exact kind of period mismatch already fixed once.
 
     Raises ValueError rather than silently truncating or ignoring gaps —
     a Sharpe number quietly built on a short or gappy window is worse than
@@ -222,8 +242,10 @@ def compute_realized_return(portfolio_returns: pd.Series, lookback_days: int) ->
             "refusing to silently drop or fill them"
         )
 
-    cumulative = float((1.0 + window).prod() - 1.0)
-    return cumulative
+    cumulative = (1.0 + window).prod() - 1.0
+    years = lookback_days / annualization_days
+    annualized_return = float((1.0 + cumulative) ** (1.0 / years) - 1.0)
+    return annualized_return
 
 
 def compute_dcc_garch_volatility_current(
@@ -539,6 +561,28 @@ if __name__ == "__main__":
         expected = (1.0 + daily_r) ** 252 - 1.0
         assert abs(realized - expected) < 1e-12, (realized, expected)
         print("✓ compute_realized_return: matches hand-computed compounded return")
+
+        # 3-year window (lookback_days=756, the current SharpeConfig default)
+        # with the SAME constant daily rate -> the ANNUALIZED figure must
+        # equal the exact same per-year rate as the 1-year case above (since
+        # a constant daily return has an invariant average annual rate
+        # regardless of window length), NOT the much larger raw 3-year
+        # cumulative total -- this is the actual "average, not total" fix.
+        dates_3yr = pd.bdate_range("2023-01-01", periods=760)
+        returns_3yr = pd.Series(daily_r, index=dates_3yr)
+        realized_3yr_annualized = compute_realized_return(returns_3yr, lookback_days=756)
+        cumulative_3yr_total = (1.0 + daily_r) ** 756 - 1.0
+        assert abs(realized_3yr_annualized - expected) < 1e-9, (realized_3yr_annualized, expected)
+        assert realized_3yr_annualized < cumulative_3yr_total, (
+            "annualized 3yr return must be far smaller than the raw 3yr "
+            "cumulative total for a positive-return series, or the "
+            "annualization isn't actually happening"
+        )
+        print(
+            f"✓ compute_realized_return: 3-year window annualizes to the same "
+            f"per-year rate ({realized_3yr_annualized:.6f}) as the 1-year case, "
+            f"not the raw 3yr total ({cumulative_3yr_total:.6f})"
+        )
 
         # Too few observations -> raises
         try:
