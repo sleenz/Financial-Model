@@ -340,26 +340,34 @@ if not backend or "zoom" not in backend:
     st.caption("Add at least 2 tickers to see the correlation network.")
 else:
     zoom = backend["zoom"]
-    sector_options = ["(sector overview)"] + sorted(zoom.sector_network.sector_members.keys())
+    sector_options = (
+        ["(sector overview)", "(all assets)"] + sorted(zoom.sector_network.sector_members.keys())
+    )
+    selected = st.selectbox("View", sector_options, key="pb_network_zoom")
 
-    slider_col, zoom_col = st.columns(2)
-    with slider_col:
+    pos_col, hedge_col = st.columns(2)
+    with pos_col:
         # Purely a rendering filter over the already-cached zoom object below
         # (keyed by ticker set — see _get_backend_data) — moving this slider
         # never re-fetches data, re-runs HRP's .corr(), or rebuilds the MST.
-        threshold = st.slider(
-            "Correlation threshold (additional edges beyond the MST)",
-            min_value=-1.0, max_value=1.0,
-            value=_CORRELATION_NETWORK_CONFIG.threshold, step=0.05,
-            key="pb_corr_threshold",
+        positive_threshold = st.slider(
+            "Correlation threshold (show correlated pairs at/above this)",
+            min_value=0.0, max_value=1.0,
+            value=_CORRELATION_NETWORK_CONFIG.positive_threshold, step=0.05,
+            key="pb_corr_positive_threshold",
         )
-    with zoom_col:
-        selected = st.selectbox("Zoom into a sector", sector_options, key="pb_network_zoom")
+    with hedge_col:
+        hedge_threshold = st.slider(
+            "Hedge threshold (show anti-correlated/hedge pairs at/below this)",
+            min_value=-1.0, max_value=0.0,
+            value=_CORRELATION_NETWORK_CONFIG.hedge_threshold, step=0.05,
+            key="pb_corr_hedge_threshold",
+        )
 
     edge_filter_config = CorrelationNetworkConfig(
         always_include_mst=_CORRELATION_NETWORK_CONFIG.always_include_mst,
-        threshold=threshold,
-        threshold_is_percentile=_CORRELATION_NETWORK_CONFIG.threshold_is_percentile,
+        positive_threshold=positive_threshold,
+        hedge_threshold=hedge_threshold,
     )
 
     if selected == "(sector overview)":
@@ -367,6 +375,11 @@ else:
         distance_source = zoom.sector_network.distance_matrix
         title = "Sector overview (default zoom)"
         node_basis = "sector"
+    elif selected == "(all assets)":
+        mst_source = zoom.ticker_network.mst
+        distance_source = zoom.ticker_network.distance_matrix
+        title = "All assets (every ticker, ticker-level)"
+        node_basis = "ticker"
     else:
         members = zoom.sector_network.sector_members.get(selected, [])
         mst_source = get_sector_subgraph(zoom.ticker_network, zoom.sector_network.sector_members, selected)
@@ -405,10 +418,15 @@ else:
             x1, y1 = pos[v]
             corr = correlation_from_distance(data["weight"])
             color, opacity = edge_style_for_correlation(corr, style_config)
+            # A midpoint (not just the two endpoints) gives Plotly a closer
+            # point to snap hover to along the whole length of the line, not
+            # just right at a node — otherwise hovering mid-edge often misses.
+            xm, ym = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+            hover_text = f"{u} – {v}<br>Correlation: {corr:.3f}<br>Distance: {data['weight']:.3f}"
             edge_traces.append(go.Scatter(
-                x=[x0, x1], y=[y0, y1], mode="lines",
+                x=[x0, xm, x1], y=[y0, ym, y1], mode="lines",
                 line=dict(width=3, color=color), opacity=opacity,
-                hoverinfo="text", text=f"{u} – {v}: correlation {corr:.2f}",
+                hoverinfo="text", text=[hover_text, hover_text, hover_text],
                 showlegend=False,
             ))
 
@@ -442,19 +460,22 @@ else:
             )
         with legend_col2:
             st.markdown(
-                "**Edge color/opacity — correlation strength**<br>"
-                f"<span style='color:{style_config.edge_color_negative}'>▬</span> weak/negative"
-                "&nbsp;→&nbsp;"
+                "**Edge color = sign, opacity = strength**<br>"
+                f"<span style='color:{style_config.edge_color_negative}'>▬</span> strong hedge"
+                "&nbsp;←weak→&nbsp;"
                 f"<span style='color:{style_config.edge_color_positive}'>▬</span> strong positive",
                 unsafe_allow_html=True,
             )
         st.caption(
             "The network is a minimum spanning tree built on the Mantegna "
             "distance transform of ticker-level correlation — shorter, "
-            "more-opaque edges connect more correlated tickers. MST edges "
-            "are always shown regardless of the slider above, which only "
-            "adds or removes additional edges whose correlation strength "
-            "clears the chosen threshold."
+            "more-opaque edges connect more correlated tickers. Hover an "
+            "edge for its exact correlation and distance. MST edges are "
+            "always shown regardless of the sliders above; the correlation "
+            "threshold adds strongly-correlated pairs, the hedge threshold "
+            "adds strongly anti-correlated (hedge-like) pairs — pick "
+            "\"(all assets)\" above to see every ticker in one view instead "
+            "of one sector at a time."
         )
 
     if zoom.ticker_network.excluded_tickers:
