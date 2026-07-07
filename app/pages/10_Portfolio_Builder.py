@@ -44,7 +44,7 @@ from src.portfolio_builder.network import (
     NetworkStyleConfig,
     build_semantic_zoom_network,
     correlation_from_distance,
-    edge_style_for_correlation,
+    edge_color_for_correlation,
     filter_edges_by_threshold,
     get_sector_subgraph,
     node_color_for_percentile,
@@ -417,7 +417,7 @@ else:
             x0, y0 = pos[u]
             x1, y1 = pos[v]
             corr = correlation_from_distance(data["weight"])
-            color, opacity = edge_style_for_correlation(corr, style_config)
+            color = edge_color_for_correlation(corr, style_config)
             # A midpoint (not just the two endpoints) gives Plotly a closer
             # point to snap hover to along the whole length of the line, not
             # just right at a node — otherwise hovering mid-edge often misses.
@@ -425,7 +425,7 @@ else:
             hover_text = f"{u} – {v}<br>Correlation: {corr:.3f}<br>Distance: {data['weight']:.3f}"
             edge_traces.append(go.Scatter(
                 x=[x0, xm, x1], y=[y0, ym, y1], mode="lines",
-                line=dict(width=3, color=color), opacity=opacity,
+                line=dict(width=3, color=color), opacity=style_config.edge_opacity,
                 hoverinfo="text", text=[hover_text, hover_text, hover_text],
                 showlegend=False,
             ))
@@ -459,23 +459,31 @@ else:
                 unsafe_allow_html=True,
             )
         with legend_col2:
+            gradient_css = (
+                f"background: linear-gradient(to right, {style_config.edge_color_negative}, "
+                f"{style_config.edge_color_neutral}, {style_config.edge_color_positive}); "
+                "height: 14px; border-radius: 3px; margin-top: 2px;"
+            )
             st.markdown(
-                "**Edge color = sign, opacity = strength**<br>"
-                f"<span style='color:{style_config.edge_color_negative}'>▬</span> strong hedge"
-                "&nbsp;←weak→&nbsp;"
-                f"<span style='color:{style_config.edge_color_positive}'>▬</span> strong positive",
+                "**Edge color — correlation strength (gradient)**<br>"
+                f"<div style='{gradient_css}'></div>"
+                "<div style='display:flex; justify-content:space-between; "
+                "font-size:0.75em; color:gray;'>"
+                "<span>-1.0 (strong hedge)</span><span>0.0</span>"
+                "<span>+1.0 (strong positive)</span></div>",
                 unsafe_allow_html=True,
             )
         st.caption(
             "The network is a minimum spanning tree built on the Mantegna "
-            "distance transform of ticker-level correlation — shorter, "
-            "more-opaque edges connect more correlated tickers. Hover an "
-            "edge for its exact correlation and distance. MST edges are "
-            "always shown regardless of the sliders above; the correlation "
-            "threshold adds strongly-correlated pairs, the hedge threshold "
-            "adds strongly anti-correlated (hedge-like) pairs — pick "
-            "\"(all assets)\" above to see every ticker in one view instead "
-            "of one sector at a time."
+            "distance transform of ticker-level correlation — shorter edges "
+            "connect more correlated tickers, and edge COLOR (not opacity) "
+            "shows correlation strength as a gradient toward the hedge or "
+            "positive end. Hover an edge for its exact correlation and "
+            "distance. MST edges are always shown regardless of the sliders "
+            "above; the correlation threshold adds strongly-correlated "
+            "pairs, the hedge threshold adds strongly anti-correlated "
+            "(hedge-like) pairs — pick \"(all assets)\" above to see every "
+            "ticker in one view instead of one sector at a time."
         )
 
     if zoom.ticker_network.excluded_tickers:
