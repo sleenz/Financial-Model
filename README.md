@@ -1,8 +1,10 @@
 # PortfolioOptimizer
 
-An advanced quantitative portfolio optimization and risk management system with a Streamlit web interface. Provides institutional-grade tools for portfolio construction, risk analytics, stress testing, factor analysis, and PDF reporting.
+An advanced quantitative portfolio optimization and risk management system with a Streamlit web interface. Provides institutional-grade tools for portfolio construction, risk analytics, stress testing, factor analysis, stock valuation, and PDF reporting — with meaningful support for both US equities and the Indonesian market (IDX, `.JK` tickers).
 
 > **Disclaimer:** This tool is a calculation-assistance aid. It is not intended as the sole basis for financial decisions. Always do your own research (DYOR).
+
+For internals — module-by-module design detail, formulas, and the reasoning behind non-obvious choices — see [`docs/architecture.md`](docs/architecture.md). That document (and its companion [`CLAUDE.md`](CLAUDE.md)) is aimed at whoever is next modifying the code; this README is aimed at getting the app running.
 
 ---
 
@@ -18,7 +20,7 @@ TWELVE_DATA_KEY=your_key_here
 FMP_KEY=your_key_here
 ```
 
-yfinance (the primary data source) works without any key. The other sources are fallbacks.
+yfinance (the primary data source) works without any key. The other sources are fallbacks used only if yfinance fails. Macro data additionally benefits from a Trading Economics key (`TE_API_KEY`) and a FRED key (`FRED_API_KEY`) — both optional, with reduced coverage if omitted.
 
 ### 2. Install dependencies
 
@@ -29,25 +31,29 @@ pip install -r requirements.txt
 ### 3. Launch the web interface
 
 ```bash
-streamlit run app/Home.py 
-or python -m run app/Home.py
+streamlit run app/Home.py
 ```
+
+---
 
 ## Features
 
 | Capability | Description |
 |---|---|
-| Data Ingestion | Multi-source fallback: yfinance → Alpha Vantage → Twelve Data → FMP, with TTL caching |
+| Data Ingestion | Multi-source fallback: yfinance → Alpha Vantage → Twelve Data → FMP, with disk caching |
 | Portfolio Optimization | 7 algorithms: Max Sharpe, Min Vol, Risk Parity, HRP, Max Diversification, Max Return, Equal Weight |
-| Risk Analytics | VaR/CVaR (3 methods), GARCH, drawdown family, Sharpe/Sortino/Calmar/Omega |
-| Deep Risk Analysis | Enhanced VaR comparison, tail risk (JB test, QQ plot), Monte Carlo, component VaR, ENB via PCA |
+| Black-Litterman | Market-equilibrium prior + investor views (absolute/relative), Bayesian posterior |
+| Risk Analytics | VaR/CVaR (historical, parametric, Cornish-Fisher), GARCH, drawdown family, Sharpe/Sortino/Calmar/Omega |
+| Deep Risk Analysis | Tail risk (Jarque-Bera, QQ plot), Monte Carlo VaR, component/marginal VaR, Effective Number of Bets via PCA |
 | Hedging Effectiveness | Beta classification, risk contribution decomposition, diversification benefit waterfall |
-| Historical Stress Testing | 7 crisis scenarios with actual per-stock returns (yfinance); beta-scaled proxy for stocks that did not exist during the event |
-| Sector Shock Stress Test | Per-stock sector-relative beta (OLS vs sector ETF) with circularity correction for dominant holdings; DCC-GARCH dynamic correlations; Student-t Copula tail dependence; HMM regime-conditioned correlation selection |
-| Macro Contagion Stress Test | Leontief Input-Output contagion model; macro sensitivity matrix (FRED + yfinance); spectral radius cascade risk |
+| Historical Stress Testing | 7 crisis scenarios replayed with actual per-stock returns; beta-scaled proxy for stocks that predate the event |
+| Sector Shock Stress Test | Per-stock sector-relative beta (ETF OLS with circularity correction); DCC-GARCH dynamic correlations; Student-t copula tail dependence; HMM regime-conditioned correlation selection |
+| Macro Contagion Stress Test | Leontief input-output contagion model; macro sensitivity matrix (Trading Economics/FRED/yfinance); spectral-radius cascade risk |
 | Monte Carlo Simulation | 4 methods: GBM, block bootstrap, Student-t, jump-diffusion |
 | Factor Analysis | Fama-French 3/5-factor, style factors (momentum/value/quality/low-vol/size), Brinson attribution |
-| Portfolio Tracking | Holdings entry (tickers + shares), diversity metrics (HHI, Gini, effective stocks) |
+| Portfolio Tracking | Holdings entry (tickers + shares) or manual ticker list; diversity metrics (HHI, Gini, effective stocks) |
+| Portfolio Presets | Save/load/rename named portfolio snapshots; loading a preset populates editable holdings at current market prices |
+| Portfolio Builder | Sector-neutral 4-factor ranking, correlation network (MST) with semantic zoom, HHI/diversification + period-matched Sharpe |
 | Rebalancing | Drift detection, trade recommendations with share counts, DCA scheduler |
 | Reporting | PDF generation with 6 chart types and 3 report templates |
 | Stock Valuation | Standalone 3-stage pipeline: Magic Formula screen → Multi-Factor Score → Reverse DCF |
@@ -62,452 +68,48 @@ PortfolioOptimizer/
 +-- app/                                  # Streamlit multi-page application
 |   +-- Home.py                           # Landing page, session state init
 |   +-- pages/
-|       +-- 1_Portfolio_Input.py          # Holdings entry and data loading
+|       +-- 1_Portfolio_Input.py          # Holdings entry, manual tickers, and Presets (3 tabs)
 |       +-- 2_Optimization.py             # Optimization + rebalancing UI
 |       +-- 3_Risk_Analytics.py           # Risk dashboard + deep analysis
 |       +-- 4_Stress_Testing.py           # Historical, Sector Shock, Macro Contagion
 |       +-- 5_Monitoring.py               # Rebalancing + attribution + DCA
 |       +-- 6_Factor_Analysis.py          # FF factors + style + decomposition
 |       +-- 7_Reports.py                  # PDF report generation UI
+|       +-- 8_Stock_Valuation.py          # Magic Formula / multi-factor / reverse DCF UI
+|       +-- 10_Portfolio_Builder.py       # Sector-neutral ranking + correlation network
 |
 +-- src/                                  # Core library
-|   +-- data/
-|   |   +-- data_manager.py               # Orchestrated multi-source fetcher
-|   |   +-- sources.py                    # YFinance/AV/TwelveData/FMP adapters
-|   |   +-- cache.py                      # TTL-based disk cache
-|   |   +-- validators.py                 # OHLCV data validation utilities
-|   |   +-- macro_data.py                 # FRED macro data fetcher (VIX, DXY, yields, PMI)
-|   |
-|   +-- optimization/
-|   |   +-- optimizers.py                 # PortfolioOptimizer -- 7 methods
-|   |   +-- constraints.py                # PortfolioConstraints dataclass
-|   |   +-- black_litterman.py            # Black-Litterman model
-|   |   +-- hrp.py                        # Standalone HRP implementation
-|   |
-|   +-- risk/
-|   |   +-- metrics.py                    # RiskMetrics -- 20+ metrics
-|   |   +-- var.py                        # VaRCalculator: historical/param/MC
-|   |   +-- garch.py                      # GARCHModel + ewma_volatility
-|   |   +-- sector_beta.py                # SectorBetaAnalyzer: sector-to-sector OLS betas
-|   |   +-- stock_sector_beta.py          # Per-stock ETF beta with circularity correction
-|   |   +-- dcc_garch.py                  # DCC-GARCH dynamic correlation model
-|   |   +-- copula.py                     # Student-t and Gaussian copula
-|   |   +-- regime_detection.py           # HMM market regime detector
-|   |   +-- macro_sensitivity.py          # Macro factor sensitivity estimation (OLS/Ridge)
-|   |   +-- contagion.py                  # Leontief Input-Output contagion model
-|   |
-|   +-- portfolio/
-|   |   +-- calculator.py                 # PositionCalculator -- share sizing
-|   |   +-- holdings.py                   # HoldingsTracker + diversity metrics
-|   |   +-- rebalancer.py                 # Rebalancer + DCAScheduler + Attribution
-|   |
-|   +-- factors/
-|   |   +-- fama_french.py                # FamaFrenchAnalyzer 3/5-factor
-|   |   +-- attribution.py                # Brinson attribution + sector analysis
-|   |   +-- style.py                      # StyleFactorAnalyzer
-|   |   +-- decomposition.py              # FactorRiskDecomposition
-|   |
-|   +-- simulation/
-|   |   +-- monte_carlo.py                # MonteCarloSimulator -- 4 methods
-|   |   +-- scenarios.py                  # StressTester + HISTORICAL_SCENARIOS (legacy)
-|   |   +-- historical_scenarios.py       # HistoricalStressor: actual per-stock crisis returns
-|   |   +-- sector_stress.py              # SectorStressEngine: DCC + Copula + HMM + beta
-|   |   +-- macro_stress.py               # MacroStressEngine: Leontief contagion
-|   |
-|   +-- reports/
-|   |   +-- generator.py                  # ReportGenerator (reportlab PDF)
-|   |   +-- templates.py                  # 3 report templates
-|   |   +-- charts.py                     # ReportChartGenerator -- 6 chart types
-|   |
-|   +-- utils/
-|       +-- helpers.py                    # validate_tickers, format_*, annualize_*
-|       +-- logger.py                     # loguru-based structured logging
+|   +-- portfolio_builder/                # Ranking, correlation network, metrics (see docs/architecture.md)
+|   +-- data/                             # Multi-source fetch, cache, sector/macro data
+|   +-- optimization/                     # PortfolioOptimizer, HRP, Black-Litterman, constraints
+|   +-- risk/                             # RiskMetrics, VaR, GARCH/DCC-GARCH, copula, regimes, contagion
+|   +-- simulation/                       # Monte Carlo, historical/sector/macro stress engines
+|   +-- valuation/                        # stock_valuer.py — 3-stage valuation pipeline
+|   +-- factors/                          # Fama-French, style factors, attribution
+|   +-- portfolio/                        # Holdings tracking, rebalancing, DCA, attribution
+|   +-- reports/                          # PDF generation
+|   +-- utils/                            # Presets, settings, logging, helpers
 |
-+-- tests/
-|   +-- test_stock_sector_beta.py         # 7 smoke tests for ETF beta module
-|
-+-- stock_valuer.py                       # Standalone 3-stage valuation pipeline
++-- tests/                                # pytest suite (optimization constraints, presets, sector beta, ...)
++-- docs/architecture.md                  # Full module-by-module design detail
++-- CLAUDE.md                             # AI-agent-facing index (load-bearing decisions, known placeholders)
 +-- requirements.txt                      # Python dependencies
-+-- setup.py                              # Package configuration
 +-- .env.example                          # API key template
 +-- README.md                             # This file
 ```
 
----
-
-## Architecture
-
-### Technology Stack
-
-#### Core Compute
-| Package | Version | Role |
-|---|---|---|
-| pandas | >=2.0.0 | DataFrames, time-series operations |
-| numpy | >=1.24.0 | Array math, matrix operations |
-| scipy | >=1.10.0 | SLSQP optimizer, hierarchical clustering, stats |
-
-#### Financial Data
-| Package | Version | Role |
-|---|---|---|
-| yfinance | >=0.2.40 | Primary OHLCV + fundamentals + ETF holdings |
-| alpha_vantage | >=2.3.1 | Fallback price data (500 req/day) |
-| pandas_datareader | >=0.10.0 | Fama-French factor data from Ken French |
-| requests | >=2.31.0 | Twelve Data + FMP REST APIs + FRED |
-
-#### Optimization & Risk
-| Package | Version | Role |
-|---|---|---|
-| arch | >=6.3.0 | GARCH(1,1) and DCC-GARCH volatility modeling |
-| scikit-learn | >=1.3.0 | PCA for Effective Number of Bets; HMM regime detection |
-| statsmodels | >=0.14.0 | OLS for Fama-French regressions and sector ETF betas |
-
-#### Web & Visualization
-| Package | Version | Role |
-|---|---|---|
-| streamlit | >=1.31.0 | Web interface framework |
-| plotly | >=5.18.0 | All interactive charts |
-| matplotlib | >=3.7.0 | Static charts for PDF reports |
-| reportlab | >=4.0.0 | PDF generation |
-
-#### Utilities
-| Package | Version | Role |
-|---|---|---|
-| loguru | >=0.7.0 | Structured logging with rotation |
-| tenacity | >=8.2.3 | Exponential-backoff retry for network calls |
-| python-dotenv | >=1.0.0 | API key management |
-| rich | >=13.0.0 | Terminal formatting for stock_valuer.py |
-| tabulate | >=0.9.0 | Table formatting fallback |
+Most `src/` modules also ship a runnable smoke test behind `if __name__ == "__main__":` (e.g. `python -m src.portfolio_builder.ranking`) in addition to, or instead of, `pytest` coverage under `tests/` — see `docs/architecture.md` for which modules use which.
 
 ---
 
-### Data Layer (`src/data/`)
-
-**`DataManager`** is the central orchestrator. It implements a priority-ordered fallback chain across 4 data sources with TTL caching.
-
-```
-get_price_data(tickers, start_date, end_date)
-    → Check DataCache  (86400s TTL for historical, 3600s for intraday)
-    → Try YFinanceSource     (primary, batched in groups of 5, 3 retries)
-    → Try AlphaVantageSource (500 req/day, 12s rate limit)
-    → Try TwelveDataSource   (800 req/day, 8s rate limit)
-    → Try FMPSource          (0.5s between calls)
-    → Validate with DataValidator
-    → Cache + return prices DataFrame (dates x tickers)
-```
-
-Key methods: `get_price_data`, `get_returns`, `get_ohlcv_data`, `get_current_prices`, `get_sector_info`, `get_sector_classifications`, `clear_cache`, `get_cache_stats`.
-
-**`MacroDataFetcher`** (`macro_data.py`) fetches macroeconomic time series from FRED and yfinance: VIX, DXY, US 10Y yield, BI rate (Indonesia), IDR/USD, China PMI, CPO, coal, nickel prices. Configurable cache TTL.
-
----
-
-### Optimization Engine (`src/optimization/`)
-
-All numeric optimization uses `scipy.optimize.minimize` (SLSQP). The constructor pre-computes annualized mean returns and covariance matrix once.
-
-```python
-PortfolioOptimizer(returns: pd.DataFrame, risk_free_rate=0.02, frequency=252)
-result = optimizer.optimize(method='max_sharpe', constraints=constraints)
-# result = {weights, expected_return, volatility, sharpe_ratio, method}
-```
-
-| Method | Algorithm | Objective |
-|---|---|---|
-| `max_sharpe` | SLSQP | Maximize (mu - rf) / sigma |
-| `min_volatility` | SLSQP | Minimize sqrt(w'Sw) |
-| `max_return` | SLSQP | Maximize w·mu |
-| `max_diversification` | SLSQP | Maximize weighted-avg vol / portfolio vol |
-| `risk_parity` | SLSQP | Minimize sum((RC_i - RC_target)^2) |
-| `hrp` | Hierarchical clustering | Recursive bisection, inverse-variance weights |
-| `equal_weight` | Analytical | 1/n for all assets |
-
-**HRP detail:** correlation-based distance d_ij = sqrt(0.5*(1-rho_ij)), single-linkage clustering, quasi-diagonal reordering, recursive bisection with inverse-variance cluster allocation.
-
-**Efficient Frontier:** sweeps target returns from min-vol to max-return; per point uses SLSQP with two equality constraints (sum(w)=1, w·mu=target); options ftol=1e-9, maxiter=1000; accepts near-converged solutions when |sum(w)-1| < 1e-3; output sorted by volatility.
-
-**`black_litterman.py`:** full Black-Litterman model with market equilibrium prior + investor views (P, Q matrices). Implemented but not yet wired into the UI.
-
----
-
-### Risk Analytics (`src/risk/`)
-
-**`RiskMetrics`** provides 20+ metrics:
-
-```python
-RiskMetrics(returns: pd.DataFrame, risk_free_rate=0.02, frequency=252)
-```
-
-- Volatility: `historical_volatility`, `parkinson_volatility` (range-based), `downside_deviation`
-- Ratios: `sharpe_ratio`, `sortino_ratio`, `calmar_ratio`, `omega_ratio`
-- Drawdown: `max_drawdown`, `average_drawdown`, `ulcer_index`, `drawdown_series`
-- Summary: `summary_table(prices)` — all metrics in one DataFrame
-
-**`VaRCalculator`:** `historical_var`, `parametric_var`, `monte_carlo_var`, `calculate_all`
-
-**`GARCHModel`:** GARCH(1,1) via `arch` library. `ewma_volatility(returns, decay=0.94)` for EWMA vol.
-
-**`SectorBetaAnalyzer`** (`sector_beta.py`): sector-to-sector OLS betas estimated over 1Y and 3Y windows. Produces a beta matrix (N_sectors x N_sectors) with stability flags for pairs where the 1Y and 3Y estimates diverge materially.
-
-**`compute_all_stock_betas`** (`stock_sector_beta.py`): per-stock OLS beta estimated against the stock's sector ETF (e.g. XLK for Technology, XLF for Financials). Covers GICS and TRBC sector labels. For dominant holdings with ETF weight above the 10% threshold, applies the ETF-ex-stock circularity correction before running OLS.
-
-```
-R_etf_ex = (R_etf - w * R_stock) / (1 - w)
-```
-
-This removes the stock's own contribution from the ETF return series, preventing the inflated beta that would otherwise result from AAPL (20% of XLK) or NVDA (24% of XLK) being regressed against a benchmark they partially drive. Indonesian tickers (`.JK` suffix) fall back to `^JKSE` as the market proxy.
-
-| Source value | Meaning |
-|---|---|
-| `sector_etf` | Straight OLS against sector ETF; weight below circularity threshold |
-| `etf_ex_stock` | OLS against circularity-corrected ETF returns; weight above threshold |
-| `market_proxy` | IDX ticker — OLS against ^JKSE |
-| `fallback` | ETF download failed or sector not mapped; beta fixed at 1.0 |
-
-Known dominant weights for tickers without live ETF holdings data:
-
-| Stock | ETF | Assumed weight |
-|---|---|---|
-| NVDA | XLK | 24% |
-| AAPL | XLK | 20% |
-| MSFT | XLK | 18% |
-| AMZN | XLY | 22% |
-| TSLA | XLY | 16% |
-
-**`DCCGARCHModel`** (`dcc_garch.py`): Dynamic Conditional Correlation GARCH. Estimates time-varying correlation matrices; surfaces current, stress (95th percentile), and calm (5th percentile) snapshots.
-
-**`StudentTCopula`** (`copula.py`): Student-t and Gaussian copula with conditional simulation. Given a shocked sector, simulates conditional return draws for all other sectors at a specified quantile of the loss tail.
-
-**`MarketRegimeDetector`** (`regime_detection.py`): Hidden Markov Model (Gaussian emissions) fitted to portfolio-level realized volatility and drawdown features. Classifies the current market into regimes (calm / elevated / mild stress / crisis) and selects the appropriate correlation matrix for stress scenarios.
-
-**`MacroSensitivityEstimator`** (`macro_sensitivity.py`): OLS or Ridge regression of sector returns against macro factors (VIX, DXY, US 10Y, BI rate, IDR/USD, China PMI, CPO, coal, nickel). Produces an S matrix (sectors x macro factors).
-
-**`LeontiefContagionModel`** (`contagion.py`): Leontief Input-Output framework. Applies the macro sensitivity matrix S to a macro shock vector to get initial sector distress; the Leontief inverse (I - W)^{-1} amplifies distress through inter-sector linkages. Reports spectral radius, cascade risk level, and per-sector amplification multipliers.
-
----
-
-### Portfolio Management (`src/portfolio/`)
-
-**`HoldingsTracker`:** takes `{ticker: num_shares}` + current prices; computes HHI, effective stock count, Gini coefficient, diversification ratio, concentration metrics; provides text recommendations.
-
-**`PositionCalculator`:** converts capital + weights + prices into share counts (integer or fractional), accounting for commission schedules.
-
-**`PortfolioRebalancer`:** detects weight drift against targets; generates buy/sell trade list with share counts.
-
-**`DCAScheduler`:** dollar-cost averaging schedule with configurable frequency and periods.
-
-**`PerformanceAttributor`:** Brinson attribution (allocation effect + selection effect + interaction).
-
----
-
-### Factor Analysis (`src/factors/`)
-
-**`FamaFrenchAnalyzer`:** OLS regression against 3-factor (MKT-RF, SMB, HML) or 5-factor (adds RMW, CMA) models. Factor data from Ken French library via `pandas_datareader`; synthetic fallback if unavailable.
-
-**`StyleFactorAnalyzer`:** computes 5 style scores per asset — Momentum (12-1 month), Value (inverse valuation), Quality (ROE stability), Low Volatility (inverse realized vol), Size (inverse log market cap).
-
-**`SectorAttribution` + `BrinsonAttribution`:** sector weight/return contributions; allocation, selection, and interaction effects.
-
-**`FactorRiskDecomposition`:** systematic vs. idiosyncratic variance split; factor stress scenarios.
-
----
-
-### Simulation (`src/simulation/`)
-
-**`MonteCarloSimulator`** supports 4 methods:
-
-| Method | Description |
-|---|---|
-| `gbm` | Geometric Brownian Motion: dP = muPdt + sigmaPdW |
-| `bootstrap` | Block bootstrap preserving autocorrelation |
-| `student_t` | Fat-tailed t-distribution for better tail modeling |
-| `jump_diffusion` | GBM with Poisson jump component |
-
-Output: `ndarray (n_simulations, horizon_days+1)`. `analyze_results()` returns mean final value, probability of loss, percentiles, mean max drawdown.
-
-**`HistoricalStressor`** (`historical_scenarios.py`): downloads actual per-stock price data for each crisis window from yfinance. For stocks that were not publicly traded during a given crisis, falls back to beta-scaled index returns. Provides a `to_comparison_dataframe()` summary and a `to_stock_breakdown()` drill-down per scenario.
-
-Pre-loaded crisis scenarios:
-
-| Scenario | Period | Index drop |
-|---|---|---|
-| 2008 Financial Crisis | 2008-09 to 2009-03 | -55% |
-| COVID-19 Crash | 2020-02 to 2020-03 | -34% |
-| 2018 Volatility Spike | 2018-10 to 2018-12 | -20% |
-| 2022 Bear Market | 2022-01 to 2022-10 | -25% |
-| Dot-com Bubble | 2000-03 to 2002-10 | -49% |
-| Gulf War | 1990-07 to 1990-10 | -20% |
-| Asian Crisis | 1997-07 to 1997-12 | -15% |
-
-**`SectorStressEngine`** (`sector_stress.py`): propagates sector-level shocks through a portfolio using four sub-models fitted in sequence:
-
-1. **SectorBetaAnalyzer** — sector-to-sector OLS beta matrix (1Y and 3Y windows); used to propagate a shock in one sector to implied returns in correlated sectors.
-2. **DCCGARCHModel** — dynamic correlations; regime detector selects the appropriate correlation snapshot (calm / stress / current).
-3. **StudentTCopula** — conditional simulation: given the shocked sector, simulates joint sector return draws at the specified loss-tail quantile.
-4. **MarketRegimeDetector** — classifies the current regime; surfaces regime label and confidence on every result.
-
-Per holding, the implied return is:
-
-```
-beta_implied_return = stock_beta * implied_sector_return
-```
-
-where `stock_beta` is the ETF-OLS estimate from `stock_sector_beta.py` (with circularity correction where applicable) and `implied_sector_return` is propagated through the sector beta matrix.
-
-**`MacroStressEngine`** (`macro_stress.py`): applies a macro shock vector (VIX delta, DXY change, yield shift, etc.) through the sensitivity matrix S to derive initial sector distress, then passes it through the Leontief contagion model. Reports direct P&L, contagion-amplified P&L, spectral radius, cascade risk tier (low / warning / critical), and Leontief multiplier table.
-
----
-
-### Report Generation (`src/reports/`)
-
-`ReportGenerator` (reportlab) + 3 templates (Portfolio Summary, Performance Review, Risk Dashboard) + `ReportChartGenerator` (6 matplotlib/seaborn chart types: allocation pie, performance line, drawdown area, correlation heatmap, monthly returns heatmap, return distribution histogram).
-
----
-
-### Standalone Valuation Pipeline (`stock_valuer.py`)
-
-Three-stage institutional screener:
-
-```
-analyze_stocks(tickers, wacc=0.10)
-    Stage 1: magic_formula_screen()
-             Filter: market_cap >= $500M, positive EBIT, debt/EBITDA <= 3x
-             Rank: EBIT/EV (earnings yield) + ROIC rank
-    Stage 2: multi_factor_score()   [top 30% by combined rank]
-             Score 0-100 across Quality (30), Value (25), Momentum (20),
-             Growth (15), Health (10) -- sector-normalised thresholds
-    Stage 3: reverse_dcf()          [score >= 65]
-             Solve for implied growth rate via scipy.brentq on (-0.50, 3.0)
-             Verdict: Reasonable / Stretched / Extreme
-```
-
-Rating labels: >=80 Strong Buy, >=65 Buy, >=50 Hold, >=35 Underweight, <35 Avoid.
-
-Key design: `_coalesce(*values)` preserves legitimate 0.0 values (unlike Python `or`); Sloan accruals are signed (not absolute); single `yf.Ticker()` instantiation per ticker via `_fetch_all()`.
-
----
-
-### Key Formulas
-
-| Metric | Formula |
-|---|---|
-| Portfolio variance | sigma^2_p = w'Sw |
-| Marginal risk contribution | MRC_i = (Sw)_i |
-| Risk contribution (%) | RC%_i = w_i * (Sw)_i / sigma^2_p ; sum = 1 |
-| Diversification Ratio | DR = sum(w_i * sigma_i) / sigma_p |
-| Beta to portfolio | beta_i = (Sw)_i / sigma^2_p |
-| Component VaR (normal) | CVaR_i = z * RC_i / sigma_p ; sum = z * sigma_p |
-| ENB (Effective Number of Bets) | exp(-sum(lambda_i * ln(lambda_i))) where lambda_i = PCA eigenvalue shares |
-| Sharpe Ratio | (mu_ann - rf) / sigma_ann |
-| Sortino Ratio | (mu_ann - rf) / downside_deviation_ann |
-| Calmar Ratio | mu_ann / abs(MDD) |
-| Sloan Accruals | (NI - OCF) / avg_total_assets (signed) |
-| Reverse DCF PV | sum[t=1..10] FCF*(1+g)^t/(1+WACC)^t + terminal_value = Market_Cap |
-| ETF-ex-stock return | R_etf_ex = (R_etf - w * R_stock) / (1 - w) |
-| Sector beta (stock) | beta = Cov(R_stock, R_etf_ex) / Var(R_etf_ex) via OLS |
-| Beta implied return | beta_implied = stock_beta * implied_sector_return |
-
----
-
-### Data Flow
-
-```
-User input (tickers, dates, capital)
-    |
-    v
-DataManager.get_returns()
-    |-- DataCache hit --> return cached
-    |-- miss --> YFinance / AV / TwelveData / FMP --> validate --> cache
-    |
-    v
-PortfolioOptimizer(returns)
-    |-- .optimize(method, constraints)
-    |       --> scipy SLSQP --> weights
-    |
-    v
-RiskMetrics(returns) + VaRCalculator(returns)
-    |-- portfolio_returns = (returns * weights).sum(axis=1)
-    |-- VaR, CVaR, drawdown, Sharpe, GARCH, ...
-    |
-    v
-Stress Testing (two paths):
-
-  Path A -- Historical
-    HistoricalStressor.run()
-        |-- yfinance actual per-stock returns for crisis window
-        |-- beta-scaled proxy for stocks that predate the crisis
-        |-- to_comparison_dataframe() + to_stock_breakdown()
-
-  Path B -- Sector Shock
-    DataManager.get_sector_classifications() --> sector_map
-    SectorStressEngine.fit(returns, sector_map)
-        |-- SectorBetaAnalyzer     --> sector-to-sector beta matrix
-        |-- compute_all_stock_betas --> per-stock ETF OLS beta
-        |-- DCCGARCHModel          --> dynamic correlation snapshots
-        |-- StudentTCopula         --> fitted copula
-        |-- MarketRegimeDetector   --> current regime
-    SectorStressEngine.run_stress(scenario, holdings)
-        |-- propagate shock through beta matrix
-        |-- scale per-stock by stock_beta
-        |-- copula conditional simulation
-        |-- regime-selected correlation matrix
-
-  Path C -- Macro Contagion
-    MacroDataFetcher  --> FRED + yfinance macro time series
-    MacroSensitivityEstimator --> S matrix (sectors x macro factors)
-    LeontiefContagionModel    --> W matrix (sector x sector linkages)
-    MacroStressEngine.run_stress(macro_scenario, holdings)
-        |-- shock * S --> initial distress vector
-        |-- (I - W)^{-1} * distress --> amplified sector returns
-        |-- weight * sector_return --> holding P&L
-    |
-    v
-FamaFrenchAnalyzer + StyleFactorAnalyzer + FactorRiskDecomposition
-    |-- OLS regressions, style scores, decomposition
-    |
-    v
-ReportGenerator + template --> PDF bytes --> st.download_button()
-```
-
----
-
-### Session State Contract
-
-All Streamlit pages share state through `st.session_state`. The keys written by each page are:
-
-**Page 1 writes:** `tickers`, `portfolio_data` (`{prices, returns, start_date, end_date, current_prices}`), `current_holdings`, `holdings_tracker`, `current_portfolio_weights`
-
-**Page 2 writes:** `settings` (`{total_capital, optimization_method, risk_free_rate, max_weight, min_weight, allow_fractional, target_volatility}`), `optimization_result` (`{weights, expected_return, volatility, sharpe_ratio, method}`), `optimizer`, `weights`, `returns`, `prices`, `portfolio_value`, `metrics`
-
-Investment parameters and all constraints (position limits, advanced constraints, position reduction/turnover) are configured on Page 2 (Optimization) — Page 1 is limited to ticker/holdings entry.
-
-**Page 4 writes:** `historical_actual_results`, `ss_engine`, `ss_result`, `ss_all_results`, `ss_sector_map`, `macro_stress_engine`, `macro_stress_result`, `macro_stress_all_results`
-
-**Page 7 writes:** `generated_report`, `report_filename`
-
-Pages 3-7 read from `portfolio_data` + `weights` + `optimization_result`. If any upstream page has not run, they display a "load data first" warning.
-
----
-
-## Web Application Pages
-
-| Page | File | Description |
-|---|---|---|
-| Home | `Home.py` | Feature overview, quick start, session init |
-| Portfolio Input | `1_Portfolio_Input.py` | Holdings entry (tickers + shares) or manual tickers; diversity analysis |
-| Optimization | `2_Optimization.py` | Capital/method/risk-free rate, constraints (position limits, advanced, position reduction), run optimizer, rebalancing diff, position sizing, efficient frontier, method comparison |
-| Risk Analytics | `3_Risk_Analytics.py` | VaR, drawdown, correlation, volatility tabs; deep risk analysis (enhanced VaR, tail risk, Monte Carlo); hedging effectiveness (risk contribution, beta classification, diversification waterfall, ENB) |
-| Stress Testing | `4_Stress_Testing.py` | Historical scenarios (actual per-stock returns), Monte Carlo (4 methods), Sector Shock (ETF beta + DCC + Copula + HMM), Macro Contagion (Leontief) |
-| Monitoring | `5_Monitoring.py` | Rebalancing drift, performance attribution, DCA scheduler |
-| Factor Analysis | `6_Factor_Analysis.py` | Fama-French 3/5-factor, sector attribution, style factors, risk decomposition |
-| Reports | `7_Reports.py` | PDF generation with configurable charts and templates |
-
----
-
-## Known Issues & Action Items
-
-### Active Bugs
+## Known Issues
 
 | Severity | Location | Issue |
 |---|---|---|
-| Low | `3_Risk_Analytics.py:243` | EWMA Volatility panel plots `rolling(20).std()` instead of the computed `ewma_vol` series. Cosmetic mislabel only. |
-| Low | `src/reports/charts.py` | Uses deprecated `pd.date_range(freq='M')` -- pandas 2.x requires `'ME'`. Causes ValueError in monthly returns heatmap chart. |
+| Low | `app/pages/3_Risk_Analytics.py` (EWMA Volatility panel) | Plots `(returns*weights).sum(axis=1).rolling(20).std()` instead of the computed `ewma_vol` series it fetches just above. Cosmetic mislabel only — the correct series is fetched, just not the one plotted. |
+
+---
+
+## License / Contributing
+
+No license file is present in this repository as of this writing — confirm usage terms with the repository owner before redistributing.
