@@ -73,6 +73,10 @@ class SectorNetwork:
     """Sector-supernode MST — the default-zoom overview."""
     mst: object                # networkx.Graph — nodes=sector names, edge attr 'weight'=aggregated distance
     sector_members: dict       # {sector: [tickers]}
+    distance_matrix: pd.DataFrame  # full sector x sector aggregated distance — the MST only keeps
+                                   # n-1 of these edges; a threshold-based edge filter (see
+                                   # filter_edges_by_threshold) needs the full matrix to consider
+                                   # re-adding a non-MST pair.
 
 
 @dataclass
@@ -235,6 +239,149 @@ def get_sector_subgraph(ticker_network: TickerNetwork, sector_members: dict, sec
     return ticker_network.mst.subgraph(members).copy()
 
 
+def correlation_from_distance(distance: float) -> float:
+    """Exact inverse of the Mantegna transform above: d = sqrt(2*(1-rho))
+    => rho = 1 - d^2/2. Recovers the underlying correlation for an MST edge
+    from its stored distance weight, so callers that need the correlation
+    (e.g. to color/shade an edge by correlation strength) don't have to
+    carry a second parallel matrix through TickerNetwork/SectorNetwork.
+    Same fixed-mathematical-definition treatment as compute_distance_matrix
+    itself — not a tunable business parameter, so no config argument."""
+    return 1.0 - (distance ** 2) / 2.0
+
+
+@dataclass
+class NetworkStyleConfig:
+    """Visual-encoding constants for rendering the correlation network.
+    Figure/layout construction itself is a rendering concern (stays in the
+    page, per this module's docstring above) — this dataclass only owns
+    the NUMBERS and color tokens that turn domain values (correlation,
+    rank percentile) into visuals, so a fix for "hardcoded colors/opacity
+    in the page" is an auditable config field, not a bare literal.
+
+    Edge opacity = edge_opacity_floor + edge_opacity_range * max(0, rho) —
+    continuous in correlation strength, not a binary on/off. Color tokens
+    below are the app's existing palette (edge_color_positive/negative
+    reuse app/pages/2_Optimization.py's "coral"/"steelblue"; node tier
+    colors reuse app/pages/4_Stress_Testing.py's low/warning/critical
+    green/orange/red), not new colors invented for this feature.
+    """
+    edge_opacity_floor: float = 0.15
+    edge_opacity_range: float = 0.60
+    edge_color_positive: str = "coral"
+    edge_color_negative: str = "steelblue"
+    node_color_top: str = "green"
+    node_color_mid: str = "orange"
+    node_color_bottom: str = "red"
+    tier_top_percentile: float = 0.67    # matches the Ranked List's own 🟢 threshold
+    tier_bottom_percentile: float = 0.33  # matches the Ranked List's own 🔴 threshold
+
+
+def edge_style_for_correlation(
+    correlation: float, config: NetworkStyleConfig = NetworkStyleConfig()
+) -> tuple:
+    """(color, opacity) for one MST edge, continuous in correlation strength
+    rather than a fixed single color/width for every edge. Any non-positive
+    correlation gets the floor opacity and the muted token — the sign is
+    what flips the token, not the magnitude of a negative value."""
+    opacity = config.edge_opacity_floor + config.edge_opacity_range * max(0.0, correlation)
+    color = config.edge_color_positive if correlation > 0 else config.edge_color_negative
+    return color, float(opacity)
+
+
+def node_color_for_percentile(
+    percentile: float, config: NetworkStyleConfig = NetworkStyleConfig()
+) -> str:
+    """Rank-tier node color, same tri-tier convention (top/middle/bottom
+    third) as the Ranked List's heat emoji, so a ticker's node color and
+    its ranked-list emoji always agree."""
+    if percentile >= config.tier_top_percentile:
+        return config.node_color_top
+    if percentile >= config.tier_bottom_percentile:
+        return config.node_color_mid
+    return config.node_color_bottom
+
+
+@dataclass
+class CorrelationNetworkConfig:
+    """Threshold for which NON-MST edges get drawn alongside the always-
+    present MST — a pure rendering filter over an already-computed distance
+    matrix, not a parameter of the correlation/MST computation itself (see
+    filter_edges_by_threshold). threshold is deliberately named for a UI
+    slider's initial value, not a fixed business constant: the page reads
+    this default once to seed the widget, then threshold changes come from
+    the widget's own state on every rerun."""
+    always_include_mst: bool = True   # MST edges are always drawn regardless of threshold — this is
+                                       # what guarantees every node stays connected/visible even at
+                                       # the strictest threshold setting.
+    threshold: float = 0.30
+    threshold_is_percentile: bool = False  # False: threshold is an absolute |correlation| cutoff.
+                                            # True: threshold is read as "keep only the top
+                                            # (1 - threshold) fraction of pairs by |correlation|."
+
+
+def filter_edges_by_threshold(
+    distance: pd.DataFrame,
+    mst,
+    config: CorrelationNetworkConfig = CorrelationNetworkConfig(),
+):
+    """Build the graph to RENDER from an ALREADY-COMPUTED distance matrix and
+    MST — every MST edge (if config.always_include_mst) plus any additional
+    non-MST pair whose |correlation| clears config.threshold. Pure filtering
+    over data the caller already has: no correlation recomputation, no MST
+    rebuild. This is what lets a UI threshold slider be a cheap client-side
+    re-filter on every rerun rather than a re-fetch/re-fit.
+
+    Threshold semantics use |correlation| (sign-agnostic) in both modes,
+    since edge color/opacity (see edge_style_for_correlation) already
+    separately encodes the sign — this threshold is purely about strength:
+    - threshold_is_percentile=False: a pair qualifies if
+      abs(correlation_from_distance(d)) >= config.threshold.
+    - threshold_is_percentile=True: pairs are ranked by |correlation| and
+      the top (1 - config.threshold) fraction qualify (e.g. threshold=0.30
+      keeps the 70% most-correlated pairs). Ties are resolved by a plain
+      sorted-list rank cutoff — a visualization filter, not a statistical
+      test, so exact tie-breaking isn't load-bearing.
+
+    Returns a networkx.Graph with the same nodes as `distance`'s index and
+    'weight'=distance on every edge (same attribute MST edges already use),
+    so downstream rendering code (edge color via correlation_from_distance)
+    doesn't need to know which edges came from the MST vs. the threshold.
+    """
+    _require_networkx()
+    graph = nx.Graph()
+    graph.add_nodes_from(distance.index)
+
+    if config.always_include_mst:
+        for u, v, data in mst.edges(data=True):
+            graph.add_edge(u, v, weight=float(data["weight"]))
+
+    nodes = list(distance.index)
+    pairs = []
+    for i, a in enumerate(nodes):
+        for b in nodes[i + 1:]:
+            d = float(distance.loc[a, b])
+            pairs.append((a, b, d, abs(correlation_from_distance(d))))
+
+    if config.threshold_is_percentile:
+        keep_fraction = max(0.0, min(1.0, 1.0 - config.threshold))
+        if pairs and keep_fraction > 0.0:
+            ranked = sorted((abs_corr for _, _, _, abs_corr in pairs), reverse=True)
+            keep_count = max(1, int(round(keep_fraction * len(ranked))))
+            cutoff = ranked[keep_count - 1]
+        else:
+            cutoff = float("inf")  # keep_fraction == 0 -> nothing qualifies
+        qualifies = (lambda abs_corr, _cutoff=cutoff: abs_corr >= _cutoff)
+    else:
+        qualifies = (lambda abs_corr, _t=config.threshold: abs_corr >= _t)
+
+    for a, b, d, abs_corr in pairs:
+        if qualifies(abs_corr):
+            graph.add_edge(a, b, weight=d)
+
+    return graph
+
+
 def build_semantic_zoom_network(
     cache: UniverseCache,
     sector_map: dict,
@@ -293,7 +440,9 @@ def build_semantic_zoom_network(
     sector_mst = build_sector_mst(sector_distance, config)
 
     return SemanticZoomNetwork(
-        sector_network=SectorNetwork(mst=sector_mst, sector_members=sector_members),
+        sector_network=SectorNetwork(
+            mst=sector_mst, sector_members=sector_members, distance_matrix=sector_distance,
+        ),
         ticker_network=TickerNetwork(mst=ticker_mst, distance_matrix=distance, excluded_tickers=excluded),
     )
 
@@ -447,6 +596,106 @@ if __name__ == "__main__":
         assert set(partial_zoom.ticker_network.mst.nodes()) == {"A", "B", "C"}
         assert partial_zoom.ticker_network.excluded_tickers == ["E"]
         print("✓ build_semantic_zoom_network: ticker missing from supplied correlation is excluded, not dropped silently")
+
+        # ── correlation_from_distance: exact inverse of the Mantegna transform ──
+        from src.portfolio_builder.network import (
+            NetworkStyleConfig,
+            edge_style_for_correlation,
+            node_color_for_percentile,
+        )
+
+        for rho in [1.0, 0.5, 0.0, -0.5, -1.0]:
+            d = float(np.sqrt(2.0 * (1.0 - rho)))
+            assert abs(correlation_from_distance(d) - rho) < 1e-9, (rho, d)
+        print("✓ correlation_from_distance: exact inverse of compute_distance_matrix's transform")
+
+        # ── edge_style_for_correlation: continuous opacity, correct color token ──
+        style = NetworkStyleConfig()
+        color_hi, opacity_hi = edge_style_for_correlation(1.0, style)
+        color_zero, opacity_zero = edge_style_for_correlation(0.0, style)
+        color_neg, opacity_neg = edge_style_for_correlation(-0.8, style)
+        assert color_hi == style.edge_color_positive
+        assert abs(opacity_hi - (style.edge_opacity_floor + style.edge_opacity_range)) < 1e-9
+        assert color_zero == style.edge_color_negative
+        assert abs(opacity_zero - style.edge_opacity_floor) < 1e-9
+        assert color_neg == style.edge_color_negative
+        # negative correlation clamped to the same floor as zero (max(0, rho))
+        assert abs(opacity_neg - style.edge_opacity_floor) < 1e-9
+        print("✓ edge_style_for_correlation: continuous opacity scaling, floor clamp on non-positive rho")
+
+        # ── node_color_for_percentile: matches Ranked List's tri-tier thresholds ──
+        assert node_color_for_percentile(0.9, style) == style.node_color_top
+        assert node_color_for_percentile(0.5, style) == style.node_color_mid
+        assert node_color_for_percentile(0.1, style) == style.node_color_bottom
+        # boundary values are inclusive on the upper tier, per >= comparisons above
+        assert node_color_for_percentile(0.67, style) == style.node_color_top
+        assert node_color_for_percentile(0.33, style) == style.node_color_mid
+        print("✓ node_color_for_percentile: tri-tier thresholds match Ranked List's own 🟢🟡🔴 cutoffs")
+
+        # ── filter_edges_by_threshold: pure re-filter over an already-built
+        # distance matrix + MST, no recomputation ────────────────────────
+        from src.portfolio_builder.network import (
+            CorrelationNetworkConfig,
+            filter_edges_by_threshold,
+        )
+
+        # Reuse the hand-computable A/B/C distance matrix + MST from above:
+        # correlations A-B=0.0, A-C=-1.0, B-C=0.5 -> |corr| = 0.0, 1.0, 0.5
+        # MST (from build_ticker_mst above) = {A-B, B-C}, skips A-C (most distant)
+
+        # Default threshold=0.30, always_include_mst=True: MST edges {A-B, B-C}
+        # plus every pair with |corr| >= 0.30 -> A-C (1.0) and B-C (0.5, already
+        # in the MST) qualify; A-B (0.0) doesn't qualify on its own but is kept
+        # via the MST -> complete triangle, 3 edges.
+        default_cfg = CorrelationNetworkConfig()
+        assert abs(default_cfg.threshold - 0.30) < 1e-9
+        g_default = filter_edges_by_threshold(dist, mst, default_cfg)
+        assert set(g_default.nodes()) == {"A", "B", "C"}
+        assert g_default.number_of_edges() == 3
+        assert g_default.has_edge("A", "B") and g_default.has_edge("B", "C") and g_default.has_edge("A", "C")
+        print("✓ filter_edges_by_threshold: default threshold pulls in a qualifying non-MST edge (A-C)")
+
+        # always_include_mst=False, high threshold=0.6: only A-C (|corr|=1.0)
+        # qualifies on its own; B (only MST-connected to C at 0.5, below 0.6)
+        # ends up with no edge at all -- proves this flag actually gates the
+        # MST-safety-net, not just adds noise on top of it.
+        g_no_mst = filter_edges_by_threshold(dist, mst, CorrelationNetworkConfig(
+            always_include_mst=False, threshold=0.6,
+        ))
+        assert set(g_no_mst.nodes()) == {"A", "B", "C"}  # nodes always present
+        assert g_no_mst.number_of_edges() == 1
+        assert g_no_mst.has_edge("A", "C")
+        assert g_no_mst.degree("B") == 0
+        print("✓ filter_edges_by_threshold: always_include_mst=False can leave a node edge-less")
+
+        # CHECK 1 (Rule 1 spec): threshold at its strictest (above the max
+        # possible |correlation|=1.0) with always_include_mst=True -> every
+        # node still has >= 1 edge (the MST guarantee), no extra edges added.
+        g_strict = filter_edges_by_threshold(dist, mst, CorrelationNetworkConfig(threshold=1.5))
+        assert g_strict.number_of_edges() == mst.number_of_edges() == 2
+        assert nx.is_connected(g_strict)
+        assert all(deg >= 1 for _, deg in g_strict.degree())
+        print("✓ filter_edges_by_threshold: max-strictness threshold still satisfies the MST connectivity guarantee")
+
+        # CHECK 2 (Rule 1 spec): threshold at its most permissive (-1.0, the
+        # slider's minimum) -> every pair qualifies (|corr| >= 0 > -1.0 always)
+        # -> complete graph. Reporting the actual edge count, not asserting
+        # it's bounded -- for n=3 that's n*(n-1)/2 = 3.
+        g_loose = filter_edges_by_threshold(dist, mst, CorrelationNetworkConfig(threshold=-1.0))
+        assert g_loose.number_of_edges() == 3 == (3 * 2) // 2
+        print("✓ filter_edges_by_threshold: threshold=-1.0 -> complete graph (3 edges for 3 nodes), reported not hidden")
+
+        # threshold_is_percentile=True: keep top (1-0.5)=50% of pairs by
+        # |correlation| -> top 2 of 3 pairs (A-C=1.0, B-C=0.5), excluding A-B
+        # (0.0). always_include_mst=False isolates the percentile logic from
+        # the MST-safety-net tested above.
+        g_pct = filter_edges_by_threshold(dist, mst, CorrelationNetworkConfig(
+            always_include_mst=False, threshold=0.5, threshold_is_percentile=True,
+        ))
+        assert g_pct.number_of_edges() == 2
+        assert g_pct.has_edge("A", "C") and g_pct.has_edge("B", "C")
+        assert not g_pct.has_edge("A", "B")
+        print("✓ filter_edges_by_threshold: threshold_is_percentile keeps the top fraction by |correlation|")
 
         print("✓ network.py smoke test passed")
 

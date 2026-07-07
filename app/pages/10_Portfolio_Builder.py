@@ -30,6 +30,7 @@ from src.data.data_manager import DataManager
 from src.portfolio_builder.cache import CacheConfig, UniverseCache
 from src.portfolio_builder.fetch import FetchConfig, OnDemandFetcher, PortfolioDataLayer
 from src.portfolio_builder.metrics import (
+    DiversificationConfig,
     SharpeConfig,
     compute_dcc_garch_volatility_current,
     compute_diversification_rating,
@@ -38,7 +39,16 @@ from src.portfolio_builder.metrics import (
     compute_sharpe,
     render_mixed_period_disclosure,
 )
-from src.portfolio_builder.network import build_semantic_zoom_network, get_sector_subgraph
+from src.portfolio_builder.network import (
+    CorrelationNetworkConfig,
+    NetworkStyleConfig,
+    build_semantic_zoom_network,
+    correlation_from_distance,
+    edge_style_for_correlation,
+    filter_edges_by_threshold,
+    get_sector_subgraph,
+    node_color_for_percentile,
+)
 from src.risk.dcc_garch import DCCGARCHConfig, DCCGARCHModel
 
 st.set_page_config(page_title="Portfolio Builder", layout="wide")
@@ -48,6 +58,11 @@ st.title("Portfolio Builder")
 # explicitly — see metrics.py docstring: FRED is broken upstream, and
 # compute_sharpe() refuses to silently default this to 0.0). ──────────────
 _MANUAL_RISK_FREE_RATE = 0.045  # update periodically until FRED is fixed
+
+# ── Correlation network edge-filter defaults — threshold is only the
+# slider's INITIAL value below; the widget's own state drives every
+# subsequent rerun (see the Correlation Network section). ────────────────
+_CORRELATION_NETWORK_CONFIG = CorrelationNetworkConfig()
 
 
 # ── Cached resources (survive reruns within a session — not reopened per
@@ -326,41 +341,121 @@ if not backend or "zoom" not in backend:
 else:
     zoom = backend["zoom"]
     sector_options = ["(sector overview)"] + sorted(zoom.sector_network.sector_members.keys())
-    selected = st.selectbox("Zoom into a sector", sector_options, key="pb_network_zoom")
+
+    slider_col, zoom_col = st.columns(2)
+    with slider_col:
+        # Purely a rendering filter over the already-cached zoom object below
+        # (keyed by ticker set — see _get_backend_data) — moving this slider
+        # never re-fetches data, re-runs HRP's .corr(), or rebuilds the MST.
+        threshold = st.slider(
+            "Correlation threshold (additional edges beyond the MST)",
+            min_value=-1.0, max_value=1.0,
+            value=_CORRELATION_NETWORK_CONFIG.threshold, step=0.05,
+            key="pb_corr_threshold",
+        )
+    with zoom_col:
+        selected = st.selectbox("Zoom into a sector", sector_options, key="pb_network_zoom")
+
+    edge_filter_config = CorrelationNetworkConfig(
+        always_include_mst=_CORRELATION_NETWORK_CONFIG.always_include_mst,
+        threshold=threshold,
+        threshold_is_percentile=_CORRELATION_NETWORK_CONFIG.threshold_is_percentile,
+    )
 
     if selected == "(sector overview)":
-        graph = zoom.sector_network.mst
+        mst_source = zoom.sector_network.mst
+        distance_source = zoom.sector_network.distance_matrix
         title = "Sector overview (default zoom)"
+        node_basis = "sector"
     else:
-        graph = get_sector_subgraph(zoom.ticker_network, zoom.sector_network.sector_members, selected)
+        members = zoom.sector_network.sector_members.get(selected, [])
+        mst_source = get_sector_subgraph(zoom.ticker_network, zoom.sector_network.sector_members, selected)
+        distance_source = zoom.ticker_network.distance_matrix.loc[members, members]
         title = f"{selected} — ticker detail (zoomed in)"
+        node_basis = "ticker"
+
+    graph = filter_edges_by_threshold(distance_source, mst_source, edge_filter_config)
 
     if graph.number_of_nodes() == 0:
         st.info("No nodes to display for this view.")
     else:
         import networkx as nx
 
+        style_config = NetworkStyleConfig()
+
+        # Node color by rank tier — same composite_score percentile basis as
+        # the Ranked List's heat emoji above, so a ticker's node color and
+        # its ranked-list emoji always agree. In sector-overview mode there's
+        # no per-sector composite_score, so sectors are ranked against each
+        # other by their members' mean score instead.
+        composite_scores = pd.Series({t: e.composite_score for t, e in backend["entries"].items()})
+        if node_basis == "ticker":
+            node_scores = composite_scores
+        else:
+            node_scores = composite_scores.groupby(pd.Series(backend["sector_map"])).mean()
+        node_percentile = (
+            node_scores.rank(pct=True) if len(node_scores) > 1 else pd.Series(1.0, index=node_scores.index)
+        )
+
         pos = nx.spring_layout(graph, seed=42)
-        edge_x, edge_y = [], []
-        for u, v in graph.edges():
+
+        edge_traces = []
+        for u, v, data in graph.edges(data=True):
             x0, y0 = pos[u]
             x1, y1 = pos[v]
-            edge_x += [x0, x1, None]
-            edge_y += [y0, y1, None]
-        edge_trace = go.Scatter(x=edge_x, y=edge_y, mode="lines", line=dict(width=1, color="#999"), hoverinfo="none")
+            corr = correlation_from_distance(data["weight"])
+            color, opacity = edge_style_for_correlation(corr, style_config)
+            edge_traces.append(go.Scatter(
+                x=[x0, x1], y=[y0, y1], mode="lines",
+                line=dict(width=3, color=color), opacity=opacity,
+                hoverinfo="text", text=f"{u} – {v}: correlation {corr:.2f}",
+                showlegend=False,
+            ))
+
+        node_colors = [
+            node_color_for_percentile(node_percentile.get(n, 1.0), style_config)
+            for n in graph.nodes()
+        ]
         node_x = [pos[n][0] for n in graph.nodes()]
         node_y = [pos[n][1] for n in graph.nodes()]
         node_trace = go.Scatter(
             x=node_x, y=node_y, mode="markers+text", text=list(graph.nodes()),
-            textposition="top center", marker=dict(size=20, color="#4C78A8"), hoverinfo="text",
+            textposition="top center", marker=dict(size=20, color=node_colors),
+            hoverinfo="text", showlegend=False,
         )
-        fig = go.Figure(data=[edge_trace, node_trace])
+        fig = go.Figure(data=edge_traces + [node_trace])
         fig.update_layout(
             title=title, showlegend=False, margin=dict(l=10, r=10, t=40, b=10),
             xaxis=dict(showgrid=False, zeroline=False, visible=False),
             yaxis=dict(showgrid=False, zeroline=False, visible=False),
         )
         st.plotly_chart(fig, use_container_width=True)
+
+        legend_col1, legend_col2 = st.columns(2)
+        with legend_col1:
+            st.markdown(
+                "**Node color — rank tier**<br>"
+                f"<span style='color:{style_config.node_color_top}'>●</span> Top third&nbsp;&nbsp;"
+                f"<span style='color:{style_config.node_color_mid}'>●</span> Middle third&nbsp;&nbsp;"
+                f"<span style='color:{style_config.node_color_bottom}'>●</span> Bottom third",
+                unsafe_allow_html=True,
+            )
+        with legend_col2:
+            st.markdown(
+                "**Edge color/opacity — correlation strength**<br>"
+                f"<span style='color:{style_config.edge_color_negative}'>▬</span> weak/negative"
+                "&nbsp;→&nbsp;"
+                f"<span style='color:{style_config.edge_color_positive}'>▬</span> strong positive",
+                unsafe_allow_html=True,
+            )
+        st.caption(
+            "The network is a minimum spanning tree built on the Mantegna "
+            "distance transform of ticker-level correlation — shorter, "
+            "more-opaque edges connect more correlated tickers. MST edges "
+            "are always shown regardless of the slider above, which only "
+            "adds or removes additional edges whose correlation strength "
+            "clears the chosen threshold."
+        )
 
     if zoom.ticker_network.excluded_tickers:
         st.caption(f"Excluded from the network (incomplete cached correlation data): {zoom.ticker_network.excluded_tickers}")
@@ -382,13 +477,23 @@ else:
         st.caption("Enter share counts in the ranked list above to see portfolio metrics.")
     else:
         weights = values / total_value
-        sector_exposure = compute_sector_exposure(weights, backend["sector_map"])
+        diversification_config = DiversificationConfig()
+        sector_exposure = compute_sector_exposure(weights, backend["sector_map"], diversification_config)
+
+        st.markdown("**Sector Exposure**")
+        sector_weight_pct = (
+            pd.Series(sector_exposure.sector_weights).sort_values(ascending=False) * 100
+        ).rename("Weight (%)")
+        st.bar_chart(sector_weight_pct)
 
         col1, col2 = st.columns(2)
         with col1:
             st.metric("Sector HHI", f"{sector_exposure.hhi:.3f}")
             if sector_exposure.is_concentrated:
-                st.warning(f"Sector concentration warning — HHI {sector_exposure.hhi:.3f} is at/above the 0.40 threshold.")
+                st.warning(
+                    f"Sector concentration warning — HHI {sector_exposure.hhi:.3f} is "
+                    f"at/above the {diversification_config.hhi_warning_threshold:.0%} threshold."
+                )
         with col2:
             if "zoom" in backend:
                 rating = compute_diversification_rating(sector_exposure, backend["zoom"].ticker_network.mst)
