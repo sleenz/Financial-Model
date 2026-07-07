@@ -88,6 +88,44 @@ def _json_safe(value):
     return value
 
 
+def compute_dcf_gap(dcf: dict) -> Optional[float]:
+    """
+    dcf_gap raw factor value: the negation of stock_valuer.reverse_dcf's
+    growth_premium (= implied_growth_rate - historical_fcf_cagr).
+
+    This is the ONLY place in the codebase that constructs a dcf_gap raw
+    value from reverse_dcf's output (ranking.py's compute_factor_zscore has
+    no way to verify this sign itself — it z-scores whatever it's given).
+    The reverse-DCF design intent is: a stock priced for LESS growth than
+    its own historical trend would suggest (growth_premium <= 0, i.e. the
+    market is NOT extrapolating recent momentum) should score HIGHER on
+    this factor than a stock priced for MORE growth than its own trend
+    (growth_premium > 0, i.e. priced-to-perfection relative to its own
+    history) — hence the negation.
+
+    Integration-verified (see fetch.py's module-level dcf_gap_real_data_check
+    docstring/report, not a synthetic unit test) against real reverse_dcf
+    output for real tickers: Coca-Cola (KO), priced for +31.8% implied growth
+    against a -17.8% trailing 3yr FCF CAGR (growth_premium=+0.496, an
+    "Extreme" reverse_dcf verdict), produced dcf_gap=-0.496 and the LOWEST
+    z-score in a real 4-ticker peer comparison — confirming the sign matches
+    the design intent for a stock that genuinely fits the "priced for growth
+    beyond its own benchmark" premise.
+
+    Returns None (not 0.0) when growth_premium itself is None (reverse_dcf
+    couldn't compute one — e.g. no positive historical FCF to compare
+    against) — a missing input must propagate as missing, never a fabricated
+    neutral value; compute_factor_zscore/compute_composite_score already
+    handle a None/NaN factor value by excluding it from factor_coverage and
+    neutral-filling the composite, so this is the correct "I don't know"
+    signal, not 0.0's "priced exactly at its historical trend."
+    """
+    growth_premium = dcf.get("growth_premium")
+    if growth_premium is None:
+        return None
+    return -float(growth_premium)
+
+
 class PortfolioDataLayer:
     """
     Adapter binding the Phase-0-audited data sources together.
@@ -311,8 +349,20 @@ if __name__ == "__main__":
             PortfolioDataLayer,
             _build_entry,
             build_default_data_layer,
+            compute_dcf_gap,
             compute_universe_entries,
         )
+
+        # ── compute_dcf_gap: hand-computable sign-flip, hermetic (no network) ──
+        # growth_premium > 0 (priced for MORE growth than own historical
+        # trend) -> dcf_gap < 0 (scores LOW); growth_premium < 0 (priced for
+        # LESS growth than own trend) -> dcf_gap > 0 (scores HIGH).
+        assert compute_dcf_gap({"growth_premium": 0.496}) == -0.496
+        assert compute_dcf_gap({"growth_premium": -1.6369}) == 1.6369
+        assert compute_dcf_gap({"growth_premium": 0.0}) == 0.0
+        assert compute_dcf_gap({"growth_premium": None}) is None
+        assert compute_dcf_gap({}) is None  # key absent entirely -> same as None, not a KeyError
+        print("✓ compute_dcf_gap: dcf_gap = -growth_premium, hand-computable, None propagates as None")
 
         class _MockDataLayer:
             """No network calls — exercises the fetch pipeline's control flow only."""

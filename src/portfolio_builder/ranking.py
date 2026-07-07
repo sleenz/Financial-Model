@@ -51,6 +51,22 @@ class TurnoverConfig:
                 f"stay_percentile ({self.stay_percentile}) must be <= "
                 f"entry_percentile ({self.entry_percentile})"
             )
+        if self.entry_percentile == 0.0 and self.stay_percentile == 0.0:
+            # A warning, not a raise: 0.0/0.0 is a legitimate value to be
+            # AT REST before backtest calibration exists (see the field
+            # comments above) — constructing this config isn't itself
+            # wrong. But it is NOT a safe conservative default either, and
+            # anything that actually CONSUMES these values for a real
+            # entry/exit decision must check for this state and refuse to
+            # act on it, not silently run with 0.0/0.0 as if it meant
+            # something (e.g. "enter/stay at the 0th percentile" is not a
+            # meaningful turnover rule — it's the absence of one).
+            logger.warning(
+                "TurnoverConfig is at its undefined placeholder default "
+                "(0.0/0.0) — this is NOT a safe conservative value, it is "
+                "unset. Do not consume this in live turnover logic until "
+                "backtest calibration sets real values."
+            )
 
 
 @dataclass
@@ -66,14 +82,30 @@ class RankedStock:
     sector: str
     factor_zscores: dict       # sector-neutral z-scores
     composite_score: float
-    rank_tier: str             # "high" | "mid" | "low" — drives the heat color
+    factor_coverage: float
+    # Fraction of the four factors (FactorConfig.factors) that were real,
+    # non-NaN values BEFORE compute_composite_score's neutral-fill —
+    # e.g. 0.75 if momentum was NaN and the other three were real. Without
+    # this, a composite built from 4 real z-scores looks identical in the
+    # UI to one built from 1 real z-score and 3 filled zeros — this field
+    # is what makes thin coverage (common on lightly-traded IDX names)
+    # visually distinguishable instead of silently indistinguishable from
+    # full coverage. Computed by compute_composite_score in the same pass
+    # as the composite score itself (see that method).
+    #
+    # rank_tier (the old "high"/"mid"/"low" bucket field) is gone: heat
+    # color is now a continuous RdYlGn gradient (heat_color.py's
+    # composite_score_to_color), not a bucket assignment, and no bucket-
+    # cutoff code ever existed anywhere in this module to delete alongside
+    # it — confirmed by grep before this change (rank_tier had zero
+    # consumers outside this file's own dataclass field and smoke test).
+    #
     # NOTE: no method in this module constructs RankedStock instances yet.
     # The three methods below (compute_factor_zscore, compute_composite_score,
     # apply_point_in_time_lag) are exactly what this phase's spec and CHECK
-    # ask for and hand-verify. Assembling RankedStock rows (including
-    # rank_tier's percentile-bucket cutoffs, which would need their own
-    # config dataclass) is left as an open question for the next phase
-    # that actually consumes a ranked list end-to-end — see phase report.
+    # ask for and hand-verify. Assembling RankedStock rows is left as an
+    # open question for the next phase that actually consumes a ranked
+    # list end-to-end — see phase report.
 
 
 class RankingEngine:
@@ -162,7 +194,7 @@ class RankingEngine:
 
     def compute_composite_score(
         self, zscores: pd.DataFrame, weights: CompositeWeights
-    ) -> pd.Series:
+    ) -> tuple:
         """Weighted sum of the four sector-neutral z-scores. No hard
         filters — every ticker in the input set gets a score.
 
@@ -170,6 +202,16 @@ class RankingEngine:
         (0.0) for that factor rather than dropped — matches the "no hard
         filters" requirement: partial data degrades the score, it doesn't
         remove the ticker.
+
+        Returns (composite, factor_coverage) — factor_coverage is the
+        fraction of the four factors that were real, non-NaN values for
+        each ticker, counted in this SAME pass BEFORE the .fillna(0.0)
+        below (an entirely-missing factor column counts as missing for
+        every ticker too, same as a present-but-NaN column). Without this,
+        a composite built from 4 real z-scores is indistinguishable in the
+        UI from one built from 1 real z-score and 3 filled-neutral zeros —
+        RankedStock.factor_coverage is what a caller threads through to
+        make thin coverage visible instead of silently identical-looking.
         """
         factors = list(self.factor_config.factors)
         missing_cols = [f for f in factors if f not in zscores.columns]
@@ -180,23 +222,29 @@ class RankingEngine:
             )
 
         composite = pd.Series(0.0, index=zscores.index)
+        present_count = pd.Series(0, index=zscores.index)
         for factor in factors:
             weight = getattr(weights, factor)
             if factor in zscores.columns:
                 values = zscores[factor]
-                nan_tickers = values.index[values.isna()]
+                is_present = values.notna()
+                nan_tickers = values.index[~is_present]
                 if len(nan_tickers) > 0:
                     logger.debug(
                         f"compute_composite_score: {factor} missing for "
                         f"{list(nan_tickers)}; treated as neutral (0.0)"
                     )
+                present_count = present_count + is_present.astype(int)
                 values = values.fillna(0.0)
             else:
                 values = pd.Series(0.0, index=zscores.index)
+                # entire column absent -> not present for any ticker; present_count untouched
             composite = composite + values * weight
 
+        factor_coverage = present_count / len(factors)
+        factor_coverage.name = "factor_coverage"
         composite.name = "composite_score"
-        return composite
+        return composite, factor_coverage
 
     def apply_point_in_time_lag(
         self, fundamentals: pd.DataFrame, as_of_date: str, market: str
@@ -297,27 +345,58 @@ if __name__ == "__main__":
         # ── compute_composite_score: hand-computable 2-stock, equal weights ──
         # D: (1.0, 0.5, -0.5, 2.0) -> 0.25*(1.0+0.5-0.5+2.0) = 0.25*3.0 = 0.75
         # E: (-1.0, -0.5, 0.5, -2.0) -> 0.25*(-3.0) = -0.75
+        # Both D and E have all 4 factors present -> factor_coverage = 1.0
         zscores_df = pd.DataFrame({
             "earnings_yield": {"D": 1.0, "E": -1.0},
             "roc":            {"D": 0.5, "E": -0.5},
             "momentum":       {"D": -0.5, "E": 0.5},
             "dcf_gap":        {"D": 2.0, "E": -2.0},
         })
-        composite = engine.compute_composite_score(zscores_df, CompositeWeights())
+        composite, coverage = engine.compute_composite_score(zscores_df, CompositeWeights())
         assert abs(composite["D"] - 0.75) < 1e-9, composite["D"]
         assert abs(composite["E"] - (-0.75)) < 1e-9, composite["E"]
-        print("✓ compute_composite_score: weighted sum matches hand calc")
+        assert coverage["D"] == 1.0 and coverage["E"] == 1.0, coverage.to_dict()
+        print("✓ compute_composite_score: weighted sum matches hand calc, full coverage (4/4) -> 1.0")
 
-        # Missing factor (NaN) treated as neutral (0.0), not dropped — "no hard filters"
+        # Missing factor (NaN) treated as neutral (0.0), not dropped — "no hard filters".
+        # F has 3 real factors (earnings_yield, roc, dcf_gap) and 1 NaN
+        # (momentum) -> factor_coverage = 3/4 = 0.75, same rigor as the
+        # composite-score hand calc above, not just "a number came back".
         zscores_df2 = pd.DataFrame({
             "earnings_yield": {"F": 4.0},
             "roc": {"F": 0.0},
             "momentum": {"F": float("nan")},
             "dcf_gap": {"F": 0.0},
         })
-        composite2 = engine.compute_composite_score(zscores_df2, CompositeWeights())
+        composite2, coverage2 = engine.compute_composite_score(zscores_df2, CompositeWeights())
         assert abs(composite2["F"] - 1.0) < 1e-9, composite2["F"]  # 0.25*(4+0+0+0)
-        print("✓ compute_composite_score: missing factor -> neutral 0.0, ticker still scored")
+        assert abs(coverage2["F"] - 0.75) < 1e-9, coverage2["F"]
+        print("✓ compute_composite_score: missing factor -> neutral 0.0 in the score, 0.75 (3/4) factor_coverage")
+
+        # An entirely-absent factor COLUMN (not just NaN values within a
+        # present column) must also count as missing for every ticker's
+        # coverage, not just trigger the "absent column" warning and stop there.
+        zscores_df3 = pd.DataFrame({
+            "earnings_yield": {"G": 1.0},
+            "roc": {"G": 1.0},
+            "momentum": {"G": 1.0},
+            # dcf_gap column entirely absent
+        })
+        composite3, coverage3 = engine.compute_composite_score(zscores_df3, CompositeWeights())
+        assert abs(coverage3["G"] - 0.75) < 1e-9, coverage3["G"]  # 3 present / 4 factors
+        print("✓ compute_composite_score: an entirely-absent factor column also reduces factor_coverage (3/4)")
+
+        # Full coverage (all 4 factors real, non-NaN) -> 1.0, the other
+        # hand-computable end of the same rigor as the 0.75 case above.
+        zscores_df4 = pd.DataFrame({
+            "earnings_yield": {"H": 1.0},
+            "roc": {"H": 1.0},
+            "momentum": {"H": 1.0},
+            "dcf_gap": {"H": 1.0},
+        })
+        _, coverage4 = engine.compute_composite_score(zscores_df4, CompositeWeights())
+        assert coverage4["H"] == 1.0, coverage4["H"]
+        print("✓ compute_composite_score: all 4 factors real -> factor_coverage = 1.0")
 
         # ── apply_point_in_time_lag ───────────────────────────────────────
         fundamentals = pd.DataFrame({
@@ -360,10 +439,34 @@ if __name__ == "__main__":
             pass
         print("✓ TurnoverConfig: stay_percentile > entry_percentile raises ValueError")
 
+        # TurnoverConfig's 0.0/0.0 placeholder-default warning must actually
+        # FIRE (captured via a loguru sink, not just asserted to not crash)
+        # — and must NOT fire for any other value, including a single 0.0.
+        # get_logger() returns loguru's logger, not stdlib logging, so
+        # capture via logger.add(sink)/logger.remove(handler_id).
+        captured: list = []
+        handler_id = logger.add(lambda message: captured.append(message.record["message"]), level="WARNING")
+        try:
+            TurnoverConfig()  # defaults are 0.0/0.0
+            placeholder_warnings = [m for m in captured if "undefined placeholder default" in m]
+            assert len(placeholder_warnings) == 1, captured
+            assert "0.0/0.0" in placeholder_warnings[0]
+
+            captured.clear()
+            TurnoverConfig(entry_percentile=0.0, stay_percentile=0.0)
+            assert any("undefined placeholder default" in m for m in captured)
+
+            captured.clear()
+            TurnoverConfig(entry_percentile=0.8, stay_percentile=0.0)  # only one is 0.0 -> no warning
+            assert not any("undefined placeholder default" in m for m in captured)
+        finally:
+            logger.remove(handler_id)
+        print("✓ TurnoverConfig: 0.0/0.0 placeholder logs a captured warning; a single 0.0 does not")
+
         # ── Rule 2: every new/reused name this module touches must resolve ──
         assert FactorConfig().factors == ("earnings_yield", "roc", "momentum", "dcf_gap")
         assert PointInTimeLagConfig().us_lag_months == 6
-        assert RankedStock("X", "Tech", {}, 0.0, "mid").rank_tier == "mid"
+        assert RankedStock("X", "Tech", {}, 0.0, 1.0).factor_coverage == 1.0
         print("✓ FactorConfig / PointInTimeLagConfig / RankedStock resolve")
 
         print("✓ ranking.py smoke test passed")
