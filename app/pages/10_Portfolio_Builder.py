@@ -3,7 +3,7 @@ Portfolio Builder — assembles Phases 1-4 of src/portfolio_builder into one
 Streamlit page: ticker chips, ranked list (heat-colored score + editable
 share count + computed % weight), correlation network (sector overview
 with drill-into-sector detail), and a metrics panel (HHI/diversification
-+ mixed-period Sharpe estimate).
++ period-matched Sharpe estimate).
 
 Architecture note (Phase 5 CHECK: "no backend call fires on a
 share-count edit"): every network/data-fetch/DCC-GARCH-fit call is
@@ -32,12 +32,12 @@ from src.portfolio_builder.fetch import FetchConfig, OnDemandFetcher, PortfolioD
 from src.portfolio_builder.metrics import (
     DiversificationConfig,
     SharpeConfig,
-    compute_dcc_garch_volatility_current,
+    compute_dcc_garch_volatility_trailing,
     compute_diversification_rating,
     compute_realized_return,
     compute_sector_exposure,
     compute_sharpe,
-    render_mixed_period_disclosure,
+    render_sharpe_methodology_disclosure,
 )
 from src.portfolio_builder.network import (
     CorrelationNetworkConfig,
@@ -536,7 +536,7 @@ else:
         hist_prices = backend.get("hist_prices")
         if dcc_result is None or hist_prices is None:
             st.caption(
-                "Mixed-period Sharpe estimate needs tickers spanning at least 2 "
+                "Sharpe estimate needs tickers spanning at least 2 "
                 "sectors and available historical price data."
             )
         else:
@@ -549,16 +549,23 @@ else:
 
                 sharpe_config = SharpeConfig(risk_free_rate=_MANUAL_RISK_FREE_RATE)
                 realized = compute_realized_return(portfolio_returns, sharpe_config.lookback_days)
-                vol = compute_dcc_garch_volatility_current(dcc_result, sector_weights)
+                # Same lookback_days window as the realized-return leg above —
+                # see metrics.py's module docstring for why this replaced the
+                # old current-day-only volatility (it silently distorted
+                # Sharpe whenever "right now" wasn't representative of the
+                # trailing year).
+                vol = compute_dcc_garch_volatility_trailing(
+                    dcc_result, sector_weights, lookback_days=sharpe_config.lookback_days,
+                )
                 sharpe = compute_sharpe(realized, vol, sharpe_config)
 
                 m1, m2, m3 = st.columns(3)
                 m1.metric("Realized Return (12mo)", f"{realized * 100:.2f}%")
-                m2.metric("Volatility (current, annualized)", f"{vol * 100:.2f}%")
+                m2.metric("Volatility (12mo trailing, annualized)", f"{vol * 100:.2f}%")
                 m3.metric("Sharpe", f"{sharpe:.2f}")
-                render_mixed_period_disclosure()
+                render_sharpe_methodology_disclosure()
             except ValueError as exc:
-                st.warning(f"Mixed-period Sharpe estimate unavailable: {exc}")
+                st.warning(f"Sharpe estimate unavailable: {exc}")
 
 st.caption(f"(backend computed {st.session_state.pb_backend_call_count} time(s) this session — "
            "unaffected by share-count edits above)")
